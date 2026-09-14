@@ -28,6 +28,13 @@ class NodeDraftMapperTest {
         H4 = 8765432
         I1 = <b 0xf1f2>
         Itime = 30
+        HeaderProtectionKey = awg3-header-key=
+        ContentPaddingAddition = 16-96
+        RekeyAfterTime = 120-180
+        RekeyTimeout = 4-8
+        RejectAfterTime = 240-300
+        KeepaliveTimeout = 25-35
+        MaxHandshakeAttempts = 8-12
         FwMark = 0x1234
 
         [Peer]
@@ -56,6 +63,13 @@ class NodeDraftMapperTest {
         assertEquals("1280", draft.mtu)
         assertEquals("1.1.1.1, 8.8.8.8", draft.dns)
         assertEquals("25", draft.persistentKeepalive)
+        assertEquals("awg3-header-key=", draft.headerProtectionKey)
+        assertEquals("16-96", draft.contentPaddingAddition)
+        assertEquals("120-180", draft.rekeyAfterTime)
+        assertEquals("4-8", draft.rekeyTimeout)
+        assertEquals("240-300", draft.rejectAfterTime)
+        assertEquals("25-35", draft.keepaliveTimeout)
+        assertEquals("8-12", draft.maxHandshakeAttempts)
     }
 
     @Test
@@ -71,6 +85,13 @@ class NodeDraftMapperTest {
             "H4 = 8765432",
             "I1 = <b 0xf1f2>",
             "Itime = 30",
+            "HeaderProtectionKey = awg3-header-key=",
+            "ContentPaddingAddition = 16-96",
+            "RekeyAfterTime = 120-180",
+            "RekeyTimeout = 4-8",
+            "RejectAfterTime = 240-300",
+            "KeepaliveTimeout = 25-35",
+            "MaxHandshakeAttempts = 8-12",
             "PersistentKeepalive = 25",
             "Endpoint = awg.example.com:51820"
         ).forEach { line ->
@@ -96,6 +117,8 @@ class NodeDraftMapperTest {
         val conf = NodeDraftMapper.buildLink(draft)
         assertFalse(conf.contains("H1 ="))
         assertFalse(conf.contains("Jc ="))
+        assertFalse(conf.contains("HeaderProtectionKey ="))
+        assertFalse(conf.contains("RekeyAfterTime ="))
         assertTrue(conf.contains("MTU = 1280"))
     }
 

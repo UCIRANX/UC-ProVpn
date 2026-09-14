@@ -220,13 +220,25 @@ internal fun switchAutomaticGeoRegion(settings: SettingsUiState, code: String): 
         .filterNot { withoutRoutingAction(it).lowercase(Locale.US) in AUTO_REGION_GEO_TAGS }
 
     val siteTag = if (code == "ru") "geosite:category-ru" else "geosite:$code"
+    val orderedRules = clean(settings.directDomains) + clean(settings.directIpCidrs)
     return settings.copy(
-        directDomains = (clean(settings.directDomains) + "direct:$siteTag" + "direct:geoip:$code")
+        directDomains = (orderedRules + "direct:$siteTag" + "direct:geoip:$code")
             .distinct()
             .joinToString("\n"),
-        directIpCidrs = clean(settings.directIpCidrs).joinToString("\n")
+        directIpCidrs = ""
     )
 }
+
+internal fun selectedAppsFirst(
+    apps: List<AppEntryUiModel>,
+    selectedPackages: Set<String>
+): List<AppEntryUiModel> = apps
+    .map { it.copy(isSelected = it.packageName in selectedPackages) }
+    .sortedWith(
+        compareByDescending<AppEntryUiModel> { it.isSelected }
+            .thenBy { it.label.lowercase(Locale.ROOT) }
+            .thenBy { it.packageName }
+    )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -1120,7 +1132,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val apps: StateFlow<List<AppEntryUiModel>> =
         combine(_installedApps, _splitPackages) { list, selected ->
-            list.map { it.copy(isSelected = it.packageName in selected) }
+            selectedAppsFirst(list, selected)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun setSplitMode(mode: SplitModeUi) {
@@ -1302,13 +1314,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val membership = members.asSequence()
                 .filter { it.groupId in liveGroupIds }
                 .associate { it.nodeKey to it.groupId }
+            val endpointCountryVotes = HashMap<String, MutableList<String>>()
+            list.forEach { entity ->
+                val explicitCountry = CountryFlagHelper.detectCountryFromName(entity.name)
+                if (explicitCountry.isNotEmpty() && entity.server.isNotBlank() && entity.port > 0) {
+                    val endpointKey = normalizedEndpointKey(entity.server, entity.port)
+                    endpointCountryVotes.getOrPut(endpointKey) { ArrayList() }.add(explicitCountry)
+                }
+            }
+            val endpointCountryConsensus = endpointCountryVotes.mapValues { (_, codes) ->
+                CountryFlagHelper.consensusCountry(codes)
+            }.filterValues { it.isNotEmpty() }
             val mapped = list.mapNotNull { e ->
                 runCatching {
                     liveIds.add(e.id)
-                    val resolvedCountry = resolvedCountryCodes[normalizedEndpointHost(e.server)].orEmpty()
+                    val resolvedCountry = if (isWarpNode(e)) {
+                        ""
+                    } else {
+                        resolvedCountryCodes[normalizedEndpointHost(e.server)].orEmpty()
+                    }
+                    val endpointCountry = endpointCountryConsensus[normalizedEndpointKey(e.server, e.port)].orEmpty()
                     val fingerprint = 31 * (31 * (31 * e.name.hashCode() + e.server.hashCode()) +
                         e.protocol.hashCode()) +
-                        (e.outboundJson.hashCode() xor e.link.hashCode() xor resolvedCountry.hashCode())
+                        (e.outboundJson.hashCode() xor e.link.hashCode() xor
+                            resolvedCountry.hashCode() xor endpointCountry.hashCode())
                     val cached = nodeUiCache[e.id]
                     val base = if (cached != null && cached.fingerprint == fingerprint) {
                         cached.base
@@ -1316,7 +1345,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         val sourceName = e.name.ifBlank { e.server.ifBlank { "Server" } }
                         val safeServer = e.server
                         val countryCode = runCatching {
-                            CountryFlagHelper.detectCountryStrict(sourceName, safeServer)
+                            endpointCountry
+                                .ifBlank { CountryFlagHelper.detectCountryStrict(sourceName, safeServer) }
                                 .ifBlank { resolvedCountry }
                                 .uppercase(Locale.US)
                         }.getOrDefault(resolvedCountry)
@@ -2230,8 +2260,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val autoMemberPingSemaphore =
         kotlinx.coroutines.sync.Semaphore(PingBudget.AUTO_MEMBER_CONCURRENCY)
     // A real HTTP test starts an isolated sing-box proxy for the target node.
-    // Keep those heavier probes bounded independently from cheap endpoint pings.
-    private val realPingSemaphore = kotlinx.coroutines.sync.Semaphore(4)
+    // Two cores are already enough to keep a phone busy; starting four at once caused
+    // CPU/memory pressure and sporadic startup failures on slower devices.
+    private val realPingSemaphore = kotlinx.coroutines.sync.Semaphore(2)
+    // Port discovery releases its temporary socket before sing-box binds it. Serialize
+    // only that short startup phase so two probes cannot race for the same local port.
+    private val realPingStartupMutex = Mutex()
     private val coreBinaryMissingLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun pingAll() {
@@ -2264,10 +2298,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (targets.isEmpty()) return
         val cfg = _settings.value
         val mode = cfg.pingType
-        // A mixed list can still redirect individual UDP-only nodes to the core path;
-        // realPingSemaphore keeps those bounded without slowing the whole run down.
-        val limit = if (cfg.pingType in CORE_PING_TYPES) {
-            cfg.pingConcurrency.coerceIn(1, 4)
+        // A mixed TCPing list can still redirect UDP-only nodes to the core path. Keep
+        // the outer worker count aligned with realPingSemaphore: queued rows otherwise
+        // spent their entire per-node deadline waiting for a slot and became false 0s.
+        val containsCoreBackedChecks = cfg.pingType in CORE_PING_TYPES ||
+            (cfg.pingType == "tcping" && targets.any {
+                it.protocol.trim().lowercase(Locale.US) in UDP_ONLY_SCHEMES
+            })
+        val limit = if (containsCoreBackedChecks) {
+            cfg.pingConcurrency.coerceIn(1, PingBudget.CORE_PING_CONCURRENCY)
         } else {
             cfg.pingConcurrency.coerceIn(1, 32)
         }
@@ -2474,10 +2513,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 retryDelayMs = cfg.pingRetryDelayMs,
                 realCheck = realCheck
             ),
-            memberCount
+            memberCount,
+            if (realCheck) PingBudget.CORE_PING_CONCURRENCY else PingBudget.AUTO_MEMBER_CONCURRENCY
         )
         val measured = withTimeoutOrNull(budget, block)
-        if (measured == null) log("Ping deadline reached for ${entity.name}: unreachable")
+        if (measured == null) log("Ping deadline reached for ${entity.name}")
         return measured ?: -1
     }
 
@@ -2489,7 +2529,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         repeat(attempts) { index ->
             if (index > 0 && retryDelay > 0) kotlinx.coroutines.delay(retryDelay)
             val value = probe()
-            if (value >= 0) samples.add(value)
+            // Zero is the UI's unreachable sentinel. A successful local round trip can
+            // legitimately take less than one millisecond, so never store it as failure.
+            if (value >= 0) samples.add(value.coerceAtLeast(1))
         }
         if (samples.isEmpty()) return -1
         return when (cfg.pingAggregate) {
@@ -2527,7 +2569,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val method = effectivePingType(protocol)
         if (method in CORE_PING_TYPES) {
             val parsed = node()
-            return measureAttempts { proxyPingOnce(parsed, httpGet = method == "http") }
+            return proxyPingAttempts(parsed, httpGet = method == "http")
         }
         return measureAttempts { if (method == "icmp") icmpPing(host) else tcpPing(host, port) }
     }
@@ -2554,11 +2596,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The old sequential loop multiplied the full timeout by every member (hundreds for
         // Auto WiFi). A shared semaphore keeps this bounded while still checking the full pool.
         val realCheck = members.any { effectivePingType(it.scheme) in CORE_PING_TYPES }
-        return pingWithin(entity, memberCount = members.size, realCheck = realCheck) {
+        val completedSamples = java.util.concurrent.ConcurrentLinkedQueue<Int>()
+        val measured = pingWithin(entity, memberCount = members.size, realCheck = realCheck) {
             members.map { member ->
                 async {
                     autoMemberPingSemaphore.withPermit {
-                        measureNodeAttempts(member.scheme, member.server, member.port) { member }
+                        val sample = try {
+                            measureNodeAttempts(member.scheme, member.server, member.port) { member }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            -1
+                        }
+                        if (sample > 0) completedSamples.add(sample)
+                        sample
                     }
                 }
             }.awaitAll()
@@ -2566,6 +2617,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .minOrNull()
                 ?: -1
         }
+        // A slow/dead member must not erase a proven successful member when the
+        // pool reaches its bounded deadline. User cancellation still propagates.
+        return if (measured > 0) measured else completedSamples.minOrNull() ?: -1
     }
 
     /**
@@ -2688,7 +2742,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * moment it is sent instead of from the connect, so it reports the node's
      * request/response latency without the SOCKS and TLS setup.
      */
-    private suspend fun proxyPingOnce(node: ParsedNode, httpGet: Boolean): Int = realPingSemaphore.withPermit {
+    private suspend fun proxyPingAttempts(node: ParsedNode, httpGet: Boolean): Int = realPingSemaphore.withPermit {
         val app = getApplication<Application>()
         val binary = File(app.applicationInfo.nativeLibraryDir, "libsingbox.so")
         if (!binary.isFile) {
@@ -2699,71 +2753,112 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return@withPermit -1
         }
         val bridge = obfsBridgeOf(node)
-        val socksPort = runCatching { ServerSocket(0).use { it.localPort } }.getOrElse {
-            return@withPermit -1
-        }
-        val obfsPort = if (bridge != null) {
-            availableTcpPort(setOf(socksPort)).takeIf { it > 0 } ?: return@withPermit -1
-        } else {
-            SingboxConfigBuilder.OBFS_LOCAL_PORT
-        }
+        // Use the same anti-hijacking address pinning as a normal connection. Without
+        // this the tunnel may work while its ping-only core resolves the endpoint to an
+        // Iranian carrier's block-page address and reports 0.
+        val pinnedServers = runCatching {
+            ServerAddressPinner.pinnedAddresses(
+                hostnames = listOf(node.server),
+                foreignResolver = _settings.value.dnsDirectServers.lineSequence()
+                    .firstOrNull()?.trim().orEmpty().ifBlank { "1.1.1.1" }
+            )
+        }.getOrDefault(emptyMap())
         val workDir = File(app.cacheDir, "ping-tests/${UUID.randomUUID()}").apply { mkdirs() }
         val configFile = File(workDir, "config.json")
+        var socksPort = 0
+        var obfsPort = SingboxConfigBuilder.OBFS_LOCAL_PORT
         var process: Process? = null
         var relay: ObfsRelay? = null
         try {
-            if (bridge != null) {
-                relay = ObfsRelay(
-                    localPort = obfsPort,
-                    type = bridge.first,
-                    bridgeHost = bridge.second,
-                    bridgePort = bridge.third,
-                    // Lumen's UID is excluded from its own VpnService; the temporary
-                    // relay therefore already dials the physical network.
-                    protect = { true }
-                ).also { it.start() }
-            }
-            configFile.writeText(
-                SingboxConfigBuilder.buildConfig(
-                    node,
-                    pingSingboxOptions(socksPort, obfsPort, workDir)
-                ),
-                Charsets.UTF_8
-            )
-            process = ProcessBuilder(binary.absolutePath, "run", "-c", configFile.absolutePath)
-                .directory(workDir)
-                .redirectErrorStream(true)
-                .start()
-            val startedProcess = process
-            Thread({
-                runCatching { startedProcess.inputStream.bufferedReader().use { it.readText() } }
-            }, "lumen-real-ping-log").apply {
-                isDaemon = true
-                start()
-            }
+            val ready = realPingStartupMutex.withLock {
+                socksPort = runCatching { ServerSocket(0).use { it.localPort } }.getOrDefault(0)
+                if (socksPort <= 0) return@withLock false
+                obfsPort = if (bridge != null) {
+                    availableTcpPort(setOf(socksPort)).takeIf { it > 0 } ?: return@withLock false
+                } else {
+                    SingboxConfigBuilder.OBFS_LOCAL_PORT
+                }
+                if (bridge != null) {
+                    relay = ObfsRelay(
+                        localPort = obfsPort,
+                        type = bridge.first,
+                        bridgeHost = bridge.second,
+                        bridgePort = bridge.third,
+                        // Lumen's UID is excluded from its own VpnService; the temporary
+                        // relay therefore already dials the physical network.
+                        protect = { true }
+                    ).also { it.start() }
+                }
+                configFile.writeText(
+                    SingboxConfigBuilder.buildConfig(
+                        node,
+                        pingSingboxOptions(socksPort, obfsPort, workDir, pinnedServers)
+                    ),
+                    Charsets.UTF_8
+                )
+                process = ProcessBuilder(binary.absolutePath, "run", "-c", configFile.absolutePath)
+                    .directory(workDir)
+                    .redirectErrorStream(true)
+                    .start()
+                val startedProcess = process ?: return@withLock false
+                Thread({
+                    runCatching { startedProcess.inputStream.bufferedReader().use { it.readText() } }
+                }, "lumen-real-ping-log").apply {
+                    isDaemon = true
+                    start()
+                }
 
-            val readyDeadline = System.nanoTime() +
-                pingTimeout().coerceAtLeast(2_000).toLong() * 1_000_000L
-            var ready = false
-            while (System.nanoTime() < readyDeadline && startedProcess.isAlive) {
-                ready = runCatching {
-                    Socket().use { socket ->
-                        socket.connect(InetSocketAddress("127.0.0.1", socksPort), 100)
-                    }
-                    true
-                }.getOrDefault(false)
-                if (ready) break
-                delay(50)
+                val readyDeadline = System.nanoTime() +
+                    pingTimeout().coerceAtLeast(2_000).toLong() * 1_000_000L
+                var listening = false
+                while (System.nanoTime() < readyDeadline && startedProcess.isAlive) {
+                    listening = runCatching {
+                        Socket().use { socket ->
+                            socket.connect(InetSocketAddress("127.0.0.1", socksPort), 100)
+                        }
+                        true
+                    }.getOrDefault(false)
+                    if (listening) break
+                    delay(50)
+                }
+                listening && startedProcess.isAlive
             }
-            if (!ready || !startedProcess.isAlive) return@withPermit -1
-            httpDelayThroughSocks(socksPort, _settings.value.pingUrl, pingTimeout(), httpGet)
-        } catch (_: Exception) {
+            if (!ready) return@withPermit -1
+
+            // Reuse one ready core for every configured attempt. Restarting the process
+            // for each sample made the next probe race the previous process teardown.
+            measureAttempts {
+                val startedProcess = process
+                if (startedProcess == null || !startedProcess.isAlive) {
+                    -1
+                } else {
+                    var result = -1
+                    val urls = httpPingTargets(_settings.value.pingUrl)
+                    for (url in urls) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        try {
+                            result = httpDelayThroughSocks(socksPort, url, pingTimeout(), httpGet)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            log("Ping probe ${node.name}: ${e.message?.takeIf { it.startsWith("Probe stage:") } ?: e.javaClass.simpleName}")
+                        }
+                        if (result > 0) break
+                    }
+                    result
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("Ping setup ${node.name}: ${e.javaClass.simpleName}")
             -1
         } finally {
             process?.let {
                 runCatching { it.destroy() }
-                if (it.isAlive) runCatching { it.waitFor(300, TimeUnit.MILLISECONDS) }
+                if (it.isAlive) runCatching { it.waitFor(1_000, TimeUnit.MILLISECONDS) }
                 if (it.isAlive) runCatching { it.destroyForcibly() }
+                if (it.isAlive) runCatching { it.waitFor(1_000, TimeUnit.MILLISECONDS) }
             }
             runCatching { relay?.stop() }
             runCatching { workDir.deleteRecursively() }
@@ -2787,12 +2882,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun pingSingboxOptions(
         socksPort: Int,
         obfsPort: Int,
-        workDir: File
+        workDir: File,
+        pinnedServerIps: Map<String, List<String>>
     ): SingboxConfigOptions {
         val s = _settings.value
         return SingboxConfigOptions(
             tunMode = false,
             tunMtu = s.mtu.coerceIn(1280, 9000),
+            pinnedServerIps = pinnedServerIps,
             localSocksPort = socksPort,
             localHttpPort = 0,
             allowLanConnections = false,
@@ -2889,15 +2986,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val startedAt = System.nanoTime()
         // Failures are the expected case here, so the socket must close on every
         // exit path — a handshake exception used to leak one fd per probe.
-        return Socket().use { socket ->
-            socket.soTimeout = timeoutMs
+        var stage = "local SOCKS connection"
+        return try { Socket().use { socket ->
+            // A fresh core has no established outbound or DNS/TLS session. This
+            // setup budget is separate from the configured HTTP response timeout.
+            socket.soTimeout = PingBudget.setupMs(timeoutMs)
             socket.connect(InetSocketAddress("127.0.0.1", socksPort), timeoutMs)
+            stage = "SOCKS greeting"
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
             output.write(byteArrayOf(0x05, 0x01, 0x00))
             output.flush()
             val greeting = readExactly(input, 2)
-            if (greeting[0].toInt() != 0x05 || greeting[1].toInt() != 0x00) return -1
+            if (greeting[0].toInt() != 0x05 || greeting[1].toInt() != 0x00) throw java.io.IOException("Invalid greeting")
+            stage = "outbound connect/DNS"
             output.write(
                 byteArrayOf(0x05, 0x01, 0x00, 0x03, hostBytes.size.toByte()) +
                     hostBytes +
@@ -2905,7 +3007,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
             output.flush()
             val reply = readExactly(input, 4)
-            if (reply[1].toInt() != 0x00) return -1
+            if (reply[1].toInt() != 0x00) throw java.io.IOException("SOCKS rejected")
             when (reply[3].toInt() and 0xFF) {
                 0x01 -> readExactly(input, 4)
                 0x03 -> readExactly(input, readExactly(input, 1)[0].toInt() and 0xFF)
@@ -2914,10 +3016,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             readExactly(input, 2)
 
+            stage = "TLS handshake"
             val requestSocket: Socket = if (protocol == "https") {
                 ((SSLSocketFactory.getDefault() as SSLSocketFactory)
                     .createSocket(socket, url.host, targetPort, true) as SSLSocket).apply {
-                    soTimeout = timeoutMs
+                    soTimeout = PingBudget.setupMs(timeoutMs)
                     // A successful handshake alone is not enough: without hostname
                     // verification a captive portal can answer and create a false result.
                     sslParameters = sslParameters.apply {
@@ -2931,7 +3034,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Everything above is setup. "HTTP GET" reports the round trip from here on;
             // "real" keeps reporting the whole connect, which is the desktop behaviour.
             val requestStartedAt = System.nanoTime()
+            stage = "HTTP response"
             requestSocket.use { active ->
+                active.soTimeout = timeoutMs
                 val activeOut = active.getOutputStream()
                 val path = url.file.takeIf { it.isNotBlank() } ?: "/"
                 activeOut.write(
@@ -2950,13 +3055,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // A complete status line proves the node carried an HTTP exchange,
                     // not just some bytes back from whatever answered.
                     val status = readStatusLine(active.getInputStream())
-                    if (!isSuccessfulHttpPingStatusLine(status)) return -1
+                    if (!isSuccessfulHttpPingStatusLine(status)) throw java.io.IOException("Invalid HTTP response")
                 } else {
                     if (active.getInputStream().read() < 0) return -1
                 }
             }
             val measuredFrom = if (httpGet) requestStartedAt else startedAt
-            ((System.nanoTime() - measuredFrom) / 1_000_000L).toInt()
+            ((System.nanoTime() - measuredFrom) / 1_000_000L).toInt().coerceAtLeast(1)
+        } } catch (e: Exception) {
+            throw java.io.IOException("Probe stage: $stage (${e.javaClass.simpleName})", e)
         }
     }
 
@@ -3253,8 +3360,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         urlTestIntervalMinutes = s.urlTestIntervalMinutes.coerceIn(1, 1440),
                         urlTestToleranceMs = s.urlTestToleranceMs.coerceIn(0, 5000),
                         geoResourceSource = s.geoResourceSource,
-                        directDomains = s.directDomains.split(Regex("[\\n,;]+")).map { it.trim() }.filter { it.isNotEmpty() },
-                        directIpCidrs = s.directIpCidrs.split(Regex("[\\n,;]+")).map { it.trim() }.filter { it.isNotEmpty() },
+                        directDomains = (s.directDomains + "\n" + s.directIpCidrs)
+                            .split(Regex("[\\n,;]+"))
+                            .map { it.trim() }
+                            .filter { it.isNotEmpty() },
+                        directIpCidrs = emptyList(),
                         // Remote .srs sets and urltest selections must survive a
                         // reconnect. Without this, every start re-downloads GitHub
                         // resources and a temporary 404/network block aborts the core.
@@ -3388,7 +3498,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         return candidates.any { member ->
             member.scheme.equals("openvpn", true) ||
-                (member.outbound["type"] as? String)?.equals("openvpn", true) == true
+                (member.outbound["type"] as? String)?.let {
+                    it.equals("openvpn", true) || it.equals("openvpn-client", true)
+                } == true
         }
     }
 
@@ -3628,16 +3740,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val protocol = entity.protocol.trim().lowercase(Locale.US)
         if (protocol !in setOf("awg", "amneziawg", "wireguard", "wg")) return false
         if (CountryFlagHelper.detectCountryStrict(entity.name, entity.server).isNotEmpty()) return false
+        return !isWarpNode(entity)
+    }
+
+    private fun isWarpNode(entity: NodeEntity): Boolean {
         val outbound = entity.outboundJson.orEmpty()
-        val isWarp = runCatching { JSONObject(outbound).optBoolean("warp", false) }.getOrDefault(false) ||
+        return runCatching { JSONObject(outbound).optBoolean("warp", false) }.getOrDefault(false) ||
             entity.name.contains("warp", true) ||
             outbound.contains("cloudflare", true) ||
             outbound.contains("2606:4700:110:", true)
-        return !isWarp
     }
 
     private fun normalizedEndpointHost(server: String): String =
         server.trim().removePrefix("[").removeSuffix("]").substringBefore('%').lowercase(Locale.US)
+
+    private fun normalizedEndpointKey(server: String, port: Int): String =
+        "${normalizedEndpointHost(server)}:$port"
 
     private fun resolveCountryCode(host: String): String {
         val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return ""
@@ -3830,8 +3948,12 @@ internal object SubscriptionUsage {
  * so raising the timeout raises the deadline instead of contradicting it.
  */
 internal object PingBudget {
+    fun setupMs(timeoutMs: Int): Int = timeoutMs.coerceIn(500, 20_000).coerceAtLeast(5_000)
     /** Members of one AUTO pool probed at a time; mirrors autoMemberPingSemaphore. */
     const val AUTO_MEMBER_CONCURRENCY = 32
+
+    /** Mirrors realPingSemaphore; used by bulk scheduling to avoid timeout in its queue. */
+    const val CORE_PING_CONCURRENCY = 2
 
     /** Nothing may hold a single row in "measuring" longer than this. */
     const val MAX_NODE_MS = 180_000L
@@ -3847,19 +3969,22 @@ internal object PingBudget {
         val timeout = timeoutMs.coerceIn(500, 20_000).toLong()
         val tries = attempts.coerceIn(1, 10).toLong()
         val retryDelay = retryDelayMs.coerceIn(0, 5_000).toLong()
-        // A core-backed attempt has two separately bounded phases: starting the
-        // temporary sing-box-extended process and performing the HTTP exchange.
-        val perAttempt = if (realCheck) timeout * 2L + 500L else timeout
-        return tries * perAttempt + (tries - 1) * retryDelay + 2_000L
+        // Core-backed repeats share one temporary process. Each sample includes
+        // setup and response phases, plus fallback exchanges after a failure.
+        // SOCKS connect includes outbound DNS/handshake; HTTPS then has its own
+        // handshake. Default targets have up to three independent exchanges.
+        val probes = tries * if (realCheck) 3L * (2L * setupMs(timeoutMs) + timeout) else timeout
+        // Address pinning performs at most one 2.5 s UDP DNS query before startup.
+        val startup = if (realCheck) timeout + 3_000L else 0L
+        return startup + probes + (tries - 1) * retryDelay + 2_000L
     }
 
     /**
-     * AUTO pools probe their members in waves of [AUTO_MEMBER_CONCURRENCY], so their
-     * budget grows with the number of waves rather than with the member count: a 307
-     * member pool gets ten attempt budgets, not 307.
+     * AUTO pools use the effective probe concurrency, including the smaller core
+     * semaphore. Time spent waiting for that semaphore must fit in the deadline.
      */
-    fun nodeMs(attemptsMs: Long, memberCount: Int): Long =
-        (attemptsMs * waves(memberCount, AUTO_MEMBER_CONCURRENCY)).coerceAtMost(MAX_NODE_MS)
+    fun nodeMs(attemptsMs: Long, memberCount: Int, concurrency: Int = AUTO_MEMBER_CONCURRENCY): Long =
+        (attemptsMs * waves(memberCount, concurrency.coerceAtLeast(1))).coerceAtMost(MAX_NODE_MS)
 
     /** Backstop for a whole run: the per-node ceiling times the number of waves. */
     fun batchMs(nodeCount: Int, concurrency: Int): Long =
@@ -3872,7 +3997,19 @@ internal object PingBudget {
     }
 }
 
-/** Only a successful HTTP response is latency; errors and proxy block pages are not. */
+/** Bounded recovery destinations; all requests still traverse the selected proxy. */
+internal fun httpPingTargets(rawUrl: String): List<String> {
+    val primary = rawUrl.trim().ifBlank { "https://www.gstatic.com/generate_204" }
+    // Only the built-in connectivity destination gets alternatives. An explicit
+    // user URL is a test of that destination, not of an unrelated website.
+    return if (primary == "https://www.gstatic.com/generate_204") listOf(
+        primary,
+        "https://cp.cloudflare.com/generate_204",
+        primary
+    ) else listOf(primary, primary)
+}
+
+/** Any well-formed HTTP response proves that the request traversed the tested proxy. */
 internal fun isSuccessfulHttpPingStatusLine(status: String?): Boolean {
     val value = status?.trim().orEmpty()
     val firstSpace = value.indexOf(' ')
@@ -3883,7 +4020,9 @@ internal fun isSuccessfulHttpPingStatusLine(status: String?): Boolean {
         .takeIf { it.length == 3 }
         ?.toIntOrNull()
         ?: return false
-    return code in 200..399
+    // 401/403/404 and especially 429 are common for repeated reachability requests.
+    // HTTPS hostname verification already rejects carrier block pages and MITM replies.
+    return code in 100..599
 }
 
 internal data class SubscriptionEdit(val name: String, val url: String)

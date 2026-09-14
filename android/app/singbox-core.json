@@ -1,6 +1,6 @@
 {
   "component": "sing-box-extended",
-  "version": "1.14.0-extended-2.7.1-lumen.1",
+  "version": "1.14.0-extended-2.7.1-lumen.2",
   "source": "https://github.com/shtorm-7/sing-box-extended",
   "tag": "v1.14.0-extended-2.7.1",
   "upstream_commit": "217f77643f19e915ea38ba2a9ac7e28e22a0cec5",
@@ -12,31 +12,31 @@
     }
   ],
   "published_at": "2026-09-05T09:54:48Z",
-  "updated_at": "2026-09-09",
+  "updated_at": "2026-09-12",
   "binaries": [
     {
       "abi": "arm64-v8a",
-      "version": "1.14.0-extended-2.7.1-lumen.1",
-      "binary_sha256": "5870f16f60cb1dc0d917f69141bdd4d6a992881fbd45b682ebdf959c94020a0f",
-      "binary_size": 89773976,
+      "version": "1.14.0-extended-2.7.1-lumen.2",
+      "binary_sha256": "1627f3f98fbbaf3652d44273a8bfa0c066c3cdfaa6f334e51fde5854c5e80c30",
+      "binary_size": 91909016,
       "elf_machine": 183,
       "elf_class": 2,
       "path": "android/app/src/main/jniLibs/arm64-v8a/libsingbox.so"
     },
     {
       "abi": "armeabi-v7a",
-      "version": "1.14.0-extended-2.7.1-lumen.1",
-      "binary_sha256": "2793a18e0665f365699da6d3295bd03e66fa744661f8905637284a22635f65fb",
-      "binary_size": 84611492,
+      "version": "1.14.0-extended-2.7.1-lumen.2",
+      "binary_sha256": "ff82f830c39aea6977c641ce4a825b7413c81d7fe7ad2764e05479f6575d5b13",
+      "binary_size": 86736148,
       "elf_machine": 40,
       "elf_class": 1,
       "path": "android/app/src/main/jniLibs/armeabi-v7a/libsingbox.so"
     },
     {
       "abi": "x86_64",
-      "version": "1.14.0-extended-2.7.1-lumen.1",
-      "binary_sha256": "87c5d9c7575c0882156c05f25160575f991de08843177d2c23611dfb930d709a",
-      "binary_size": 95536536,
+      "version": "1.14.0-extended-2.7.1-lumen.2",
+      "binary_sha256": "75c746eb3fa2015dfd8ae31f1872d92ca8ebb3163ffe897b2a3f7d161356498b",
+      "binary_size": 97853880,
       "elf_machine": 62,
       "elf_class": 2,
       "path": "android/app/src/main/jniLibs/x86_64/libsingbox.so"

@@ -1231,6 +1231,7 @@ def validate_node_outbound(node: Node) -> str | None:
         "tuic",
         "mieru",
         "openvpn",
+        "openvpn-client",
         "naive",
     } and (not str(node.server or "").strip() or int(node.port or 0) <= 0):
         return f"Сервер {node.name or node.scheme} пропущен: нет адреса или порта."
@@ -1679,6 +1680,7 @@ def _json_proxy_outbounds(outbounds: list[Any]) -> list[dict[str, Any]]:
         "mieru",
         "masque",
         "openvpn",
+        "openvpn-client",
         "naive",
     }
     auto_kinds = {"selector", "urltest", "url-test"}
@@ -1722,7 +1724,7 @@ def _resolve_auto_selector_payload(selector: dict[str, Any], tag_map: dict[str, 
             "route": {"final": str(selector.get("tag") or "proxy")},
         }
         name = str(selector.get("name") or selector.get("remarks") or selector.get("tag") or "Автовыбор сервера").strip()
-        target_server = _first_mapping(target.get("servers")) if target_kind == "openvpn" else {}
+        target_server = _first_mapping(target.get("servers")) if target_kind in {"openvpn", "openvpn-client"} else {}
         server = str(target.get("server") or target.get("address") or target_server.get("server") or "")
         port = int(target.get("server_port") or target.get("port") or target_server.get("server_port") or 0)
         return {
@@ -1730,7 +1732,9 @@ def _resolve_auto_selector_payload(selector: dict[str, Any], tag_map: dict[str, 
             "tag": name,
             "remarks": name,
             "singbox_config": config,
-            "__lumen_scheme": "hysteria2" if target_kind == "hy2" else ("hysteria" if target_kind == "hy" else target_kind),
+            "__lumen_scheme": "hysteria2" if target_kind == "hy2" else (
+                "hysteria" if target_kind == "hy" else ("openvpn" if target_kind == "openvpn-client" else target_kind)
+            ),
             "__lumen_server": server,
             "__lumen_port": port,
         }
@@ -2651,7 +2655,7 @@ def _parse_json_outbound_payload(payload: dict[str, Any]) -> Node:
     elif protocol == "masque" and native:
         server = str((native.get("profile") or {}).get("id") or native.get("server") or "")
         port = int(native.get("server_port") or 0)
-    elif protocol == "openvpn" and native:
+    elif protocol in {"openvpn", "openvpn-client"} and native:
         openvpn_server = _first_mapping(native.get("servers"))
         server = str(openvpn_server.get("server") or "")
         port = int(openvpn_server.get("server_port") or 0)
@@ -2687,10 +2691,12 @@ def _parse_json_outbound_payload(payload: dict[str, Any]) -> Node:
         or outbound.get("__lumen_scheme")
         or ("auto" if protocol == "xray_config" else protocol)
     )
-    if original_payload.get("__lumen_server"):
-        server = str(original_payload.get("__lumen_server") or server)
-    if original_payload.get("__lumen_port"):
-        port = int(original_payload.get("__lumen_port") or port)
+    lumen_server = original_payload.get("__lumen_server") or outbound.get("__lumen_server")
+    lumen_port = original_payload.get("__lumen_port") or outbound.get("__lumen_port")
+    if lumen_server:
+        server = str(lumen_server)
+    if lumen_port:
+        port = int(lumen_port)
 
     meta = original_payload.get("meta") if isinstance(original_payload.get("meta"), dict) else {}
     description = str(
@@ -2744,6 +2750,7 @@ def _pick_json_proxy_outbound(outbounds: list[Any]) -> dict[str, Any]:
         "mieru",
         "masque",
         "openvpn",
+        "openvpn-client",
         "naive",
     }
     for item in candidates:
@@ -2765,9 +2772,10 @@ def _native_singbox_outbound(payload: dict[str, Any]) -> dict[str, Any]:
         protocol = native["type"] = "hysteria"
     elif protocol == "hy2":
         protocol = native["type"] = "hysteria2"
-    elif protocol == "openvpn":
+    elif protocol in {"openvpn", "openvpn-client"}:
         native["system"] = False
         native["name"] = str(native.get("name") or "openvpn0")
+        protocol = "openvpn"
     elif protocol in {"wireguard", "awg", "warp"}:
         native = normalize_wireguard_endpoint(native)
         protocol = str(native.get("type") or "custom").lower()
@@ -2794,8 +2802,8 @@ def _native_singbox_config(payload: dict[str, Any]) -> dict[str, Any]:
     normalize_singbox_wireguard_endpoints(config)
     used_openvpn_names: set[str] = set()
     openvpn_index = 0
-    for item in config.get("outbounds") or []:
-        if not isinstance(item, dict) or str(item.get("type") or "").strip().lower() != "openvpn":
+    for item in [*(config.get("outbounds") or []), *(config.get("endpoints") or [])]:
+        if not isinstance(item, dict) or str(item.get("type") or "").strip().lower() not in {"openvpn", "openvpn-client"}:
             continue
         item["system"] = False
         requested_name = str(item.get("name") or f"openvpn{openvpn_index}").strip()
@@ -2906,10 +2914,12 @@ def _is_singbox_openvpn_config_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
     outbounds = payload.get("outbounds")
+    endpoints = payload.get("endpoints")
     items = [item for item in outbounds if isinstance(item, dict)] if isinstance(outbounds, list) else []
+    endpoint_items = [item for item in endpoints if isinstance(item, dict)] if isinstance(endpoints, list) else []
     openvpn_items = [
-        item for item in items
-        if str(item.get("type") or "").strip().lower() == "openvpn"
+        item for item in [*items, *endpoint_items]
+        if str(item.get("type") or "").strip().lower() in {"openvpn", "openvpn-client"}
     ]
     if not openvpn_items:
         return False
@@ -2947,11 +2957,8 @@ def _first_wireguard_endpoint(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _first_openvpn_outbound(config: dict[str, Any]) -> dict[str, Any]:
-    outbounds = config.get("outbounds")
-    if not isinstance(outbounds, list):
-        return {}
-    for outbound in outbounds:
-        if isinstance(outbound, dict) and str(outbound.get("type") or "").strip().lower() == "openvpn":
+    for outbound in [*(config.get("outbounds") or []), *(config.get("endpoints") or [])]:
+        if isinstance(outbound, dict) and str(outbound.get("type") or "").strip().lower() in {"openvpn", "openvpn-client"}:
             return outbound
     return {}
 
@@ -2991,9 +2998,9 @@ def _wireguard_auto_group(config: dict[str, Any]) -> dict[str, Any]:
 def _openvpn_auto_group(config: dict[str, Any]) -> dict[str, Any]:
     outbound_tags = {
         str(item.get("tag") or "").strip()
-        for item in config.get("outbounds") or []
+        for item in [*(config.get("outbounds") or []), *(config.get("endpoints") or [])]
         if isinstance(item, dict)
-        and str(item.get("type") or "").strip().lower() == "openvpn"
+        and str(item.get("type") or "").strip().lower() in {"openvpn", "openvpn-client"}
         and str(item.get("tag") or "").strip()
     }
     if not outbound_tags:

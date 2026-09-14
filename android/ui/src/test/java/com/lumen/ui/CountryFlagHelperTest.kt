@@ -64,7 +64,8 @@ class CountryFlagHelperTest {
         assertEquals("RU", CountryFlagHelper.detectCountry("RU - Fast", ""))
         assertEquals("FR", CountryFlagHelper.detectCountry("Unnamed Node", "fr1.vpn.org"))
         assertEquals("", CountryFlagHelper.detectCountry("Generic Node", "192.168.1.1"))
-        assertEquals("US", CountryFlagHelper.detectCountry("WARP", "8.47.69.7"))
+        assertEquals("", CountryFlagHelper.detectCountry("WARP", "8.47.69.7"))
+        assertEquals("EE", CountryFlagHelper.detectCountry("🇪🇪 Estonia WARP", "cloudflare.com"))
     }
 
     @Test
@@ -78,6 +79,14 @@ class CountryFlagHelperTest {
         assertTrue(CountryFlagHelper.STRIPES.containsKey("GB"))
         assertTrue(CountryFlagHelper.STRIPES.containsKey("EU"))
         assertEquals(StripeStyle.Czech, CountryFlagHelper.STRIPES["CZ"]?.style)
+        assertEquals(StripeStyle.Disc, CountryFlagHelper.STRIPES["BD"]?.style)
+        assertEquals(StripeStyle.Crescent, CountryFlagHelper.STRIPES["TN"]?.style)
+        assertEquals(StripeStyle.SaudiArabia, CountryFlagHelper.STRIPES["SA"]?.style)
+        assertEquals(StripeStyle.UnitedArabEmirates, CountryFlagHelper.STRIPES["AE"]?.style)
+        assertEquals(StripeStyle.Bahrain, CountryFlagHelper.STRIPES["BH"]?.style)
+        assertEquals(StripeStyle.Qatar, CountryFlagHelper.STRIPES["QA"]?.style)
+        assertEquals(StripeStyle.Kuwait, CountryFlagHelper.STRIPES["KW"]?.style)
+        assertEquals(StripeStyle.Oman, CountryFlagHelper.STRIPES["OM"]?.style)
     }
 
     @Test
@@ -90,5 +99,26 @@ class CountryFlagHelperTest {
             "Oslo",
             CountryFlagHelper.serverDisplayNameWithoutCountryPrefix("NO | Oslo", "NO")
         )
+    }
+
+    @Test
+    fun testGulfCountryNamesAndCities() {
+        assertEquals("SA", CountryFlagHelper.detectCountry("Saudi Arabia Riyadh", ""))
+        assertEquals("AE", CountryFlagHelper.detectCountry("Dubai", ""))
+        assertEquals("BH", CountryFlagHelper.detectCountry("Бахрейн Манама", ""))
+        assertEquals("QA", CountryFlagHelper.detectCountry("Qatar Doha", ""))
+        assertEquals("KW", CountryFlagHelper.detectCountry("Kuwait City", ""))
+        assertEquals("OM", CountryFlagHelper.detectCountry("Оман Маскат", ""))
+        assertEquals("BH", CountryFlagHelper.detectServer("node.provider.bh"))
+        assertEquals("OM", CountryFlagHelper.detectServer("relay.provider.om"))
+    }
+
+    @Test
+    fun testDuplicateEndpointCountryConsensus() {
+        assertEquals("EE", CountryFlagHelper.consensusCountry(listOf("EE", "EE", "EE", "EE", "EE", "US")))
+        assertEquals("", CountryFlagHelper.consensusCountry(listOf("EE")))
+        assertEquals("", CountryFlagHelper.consensusCountry(listOf("EE", "US")))
+        assertEquals("", CountryFlagHelper.consensusCountry(listOf("EE", "EE", "US", "US")))
+        assertEquals("", CountryFlagHelper.consensusCountry(listOf("EE", "EE", "US", "DE", "FR")))
     }
 }

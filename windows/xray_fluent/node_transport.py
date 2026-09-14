@@ -23,8 +23,8 @@ def node_transport(node: Node) -> str:
         native_type = str(native.get("type") or "").strip().lower()
         if native_type == "naive":
             return "QUIC" if native.get("quic") is True else "H2"
-        if native_type == "openvpn":
-            return _normalize_transport(native.get("proto")) or "UDP"
+        if native_type in {"openvpn", "openvpn-client"}:
+            return _normalize_transport(native.get("proto") or native.get("network")) or "UDP"
         transport = native.get("transport")
         if isinstance(transport, str) and native_type == "mieru":
             return f"MIERU/{transport.upper()}"

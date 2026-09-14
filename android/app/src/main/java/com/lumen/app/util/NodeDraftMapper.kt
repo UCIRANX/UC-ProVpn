@@ -155,7 +155,14 @@ object NodeDraftMapper {
             i1 = values["i1"] ?: "", i2 = values["i2"] ?: "", i3 = values["i3"] ?: "",
             i4 = values["i4"] ?: "", i5 = values["i5"] ?: "",
             j1 = values["j1"] ?: "", j2 = values["j2"] ?: "", j3 = values["j3"] ?: "",
-            itime = values["itime"] ?: ""
+            itime = values["itime"] ?: "",
+            headerProtectionKey = values["headerprotectionkey"] ?: "",
+            contentPaddingAddition = values["contentpaddingaddition"] ?: "",
+            rekeyAfterTime = values["rekeyaftertime"] ?: "",
+            rekeyTimeout = values["rekeytimeout"] ?: "",
+            rejectAfterTime = values["rejectaftertime"] ?: "",
+            keepaliveTimeout = values["keepalivetimeout"] ?: "",
+            maxHandshakeAttempts = values["maxhandshakeattempts"] ?: ""
         )
     }
 
@@ -480,6 +487,8 @@ object NodeDraftMapper {
         "privatekey", "address", "mtu", "dns",
         "jc", "jmin", "jmax", "s1", "s2", "s3", "s4",
         "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3", "itime",
+        "headerprotectionkey", "contentpaddingaddition", "rekeyaftertime", "rekeytimeout",
+        "rejectaftertime", "keepalivetimeout", "maxhandshakeattempts",
         "publickey", "presharedkey", "allowedips", "endpoint", "reserved", "persistentkeepalive"
     )
 
@@ -537,6 +546,19 @@ object NodeDraftMapper {
             if (d.j2.isNotBlank()) sb.appendLine("J2 = ${d.j2.trim()}")
             if (d.j3.isNotBlank()) sb.appendLine("J3 = ${d.j3.trim()}")
             if (d.itime.isNotBlank()) sb.appendLine("Itime = ${d.itime.trim()}")
+            if (d.headerProtectionKey.isNotBlank()) {
+                sb.appendLine("HeaderProtectionKey = ${d.headerProtectionKey.trim()}")
+            }
+            if (d.contentPaddingAddition.isNotBlank()) {
+                sb.appendLine("ContentPaddingAddition = ${d.contentPaddingAddition.trim()}")
+            }
+            if (d.rekeyAfterTime.isNotBlank()) sb.appendLine("RekeyAfterTime = ${d.rekeyAfterTime.trim()}")
+            if (d.rekeyTimeout.isNotBlank()) sb.appendLine("RekeyTimeout = ${d.rekeyTimeout.trim()}")
+            if (d.rejectAfterTime.isNotBlank()) sb.appendLine("RejectAfterTime = ${d.rejectAfterTime.trim()}")
+            if (d.keepaliveTimeout.isNotBlank()) sb.appendLine("KeepaliveTimeout = ${d.keepaliveTimeout.trim()}")
+            if (d.maxHandshakeAttempts.isNotBlank()) {
+                sb.appendLine("MaxHandshakeAttempts = ${d.maxHandshakeAttempts.trim()}")
+            }
         }
         extras["interface"]?.forEach { sb.appendLine(it) }
         sb.appendLine()

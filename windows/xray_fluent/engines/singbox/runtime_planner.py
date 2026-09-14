@@ -394,8 +394,6 @@ def plan_singbox_runtime(
     _ensure_all_server_bootstrap_contracts(runtime_config)
     if native_is_endpoint:
         _ensure_endpoint_server_bootstrap_contract(runtime_config, native_proxy)
-    elif str(native_proxy.get("type") or "").strip().lower() == "openvpn":
-        _ensure_openvpn_server_bootstrap_contract(runtime_config, native_proxy)
     else:
         _ensure_proxy_server_bootstrap_contract(runtime_config, native_proxy, node.server)
     _apply_imported_proxy_dns(runtime_config, node, routing)
@@ -551,7 +549,7 @@ def _node_has_eager_singbox_runtime(node: Node) -> bool:
     outbound_type = str(
         native.get("type") or outbound.get("protocol") or node.scheme or ""
     ).strip().lower()
-    return outbound_type in {"masque", "wireguard", "awg", "warp", "openvpn"}
+    return outbound_type in {"masque", "wireguard", "awg", "warp", "openvpn", "openvpn-client"}
 
 
 def _ensure_singbox_hot_switch_selector(
@@ -632,10 +630,7 @@ def _ensure_singbox_hot_switch_selector(
             _ensure_endpoint_server_bootstrap_contract(config, native)
         else:
             outbounds.append(native)
-            if str(native.get("type") or "").strip().lower() == "openvpn":
-                _ensure_openvpn_server_bootstrap_contract(config, native)
-            else:
-                _ensure_proxy_server_bootstrap_contract(config, native, node.server)
+            _ensure_proxy_server_bootstrap_contract(config, native, node.server)
 
     outbounds.append(
         {
@@ -656,10 +651,11 @@ def _ensure_full_config_proxy_alias(config: dict[str, Any]) -> None:
     outbounds = config.get("outbounds")
     if not isinstance(outbounds, list):
         return
+    endpoints = config.get("endpoints") if isinstance(config.get("endpoints"), list) else []
     tags = {
-        str(outbound.get("tag") or "")
-        for outbound in outbounds
-        if isinstance(outbound, dict)
+        str(item.get("tag") or "")
+        for item in [*outbounds, *endpoints]
+        if isinstance(item, dict)
     }
     if "proxy" in tags:
         return
@@ -667,7 +663,7 @@ def _ensure_full_config_proxy_alias(config: dict[str, Any]) -> None:
     preferred = str(route.get("final") or "").strip()
     ignored = {"", "direct", "block", "dns"}
     if not preferred or preferred in ignored or preferred not in tags:
-        for outbound in outbounds:
+        for outbound in [*outbounds, *endpoints]:
             if not isinstance(outbound, dict):
                 continue
             tag = str(outbound.get("tag") or "").strip()
@@ -1093,15 +1089,36 @@ def _ensure_openvpn_server_bootstrap_contract(
 def _normalize_openvpn_outbounds(payload: dict[str, Any]) -> None:
     outbounds = payload.get("outbounds")
     if not isinstance(outbounds, list):
-        return
+        outbounds = []
+        payload["outbounds"] = outbounds
+    endpoints = _ensure_list(payload, "endpoints")
     used_names: set[str] = set()
     openvpn_index = 0
     detours: list[dict[str, Any]] = []
+    retained_outbounds: list[Any] = []
+    candidates: list[dict[str, Any]] = []
     for outbound in outbounds:
         if not isinstance(outbound, dict):
+            retained_outbounds.append(outbound)
             continue
-        if str(outbound.get("type") or "").strip().lower() != "openvpn":
+        if str(outbound.get("type") or "").strip().lower() not in {"openvpn", "openvpn-client"}:
+            retained_outbounds.append(outbound)
             continue
+        candidates.append(outbound)
+    for endpoint in endpoints:
+        if isinstance(endpoint, dict) and str(endpoint.get("type") or "").strip().lower() in {
+            "openvpn", "openvpn-client"
+        }:
+            candidates.append(endpoint)
+
+    normalized_endpoints = [
+        endpoint for endpoint in endpoints
+        if not (
+            isinstance(endpoint, dict)
+            and str(endpoint.get("type") or "").strip().lower() in {"openvpn", "openvpn-client"}
+        )
+    ]
+    for outbound in candidates:
         normalize_openvpn_outbound(outbound)
         outbound["system"] = False
         requested_name = str(outbound.get("name") or f"openvpn{openvpn_index}").strip()
@@ -1137,19 +1154,22 @@ def _normalize_openvpn_outbounds(payload: dict[str, Any]) -> None:
                 if value:
                     detour[key] = value
             detours.append(detour)
+        normalized_endpoints.append(outbound)
         openvpn_index += 1
-    outbounds.extend(detours)
+    retained_outbounds.extend(detours)
+    outbounds[:] = retained_outbounds
+    endpoints[:] = normalized_endpoints
 
 
 def _ensure_all_openvpn_server_bootstrap_contract(payload: dict[str, Any]) -> None:
-    outbounds = payload.get("outbounds")
-    if not isinstance(outbounds, list):
+    endpoints = payload.get("endpoints")
+    if not isinstance(endpoints, list):
         return
-    for outbound in outbounds:
-        if not isinstance(outbound, dict):
+    for endpoint in endpoints:
+        if not isinstance(endpoint, dict):
             continue
-        if str(outbound.get("type") or "").strip().lower() == "openvpn":
-            _ensure_openvpn_server_bootstrap_contract(payload, outbound)
+        if str(endpoint.get("type") or "").strip().lower() == "openvpn-client":
+            _ensure_openvpn_server_bootstrap_contract(payload, endpoint)
 
 
 def _ensure_all_server_bootstrap_contracts(payload: dict[str, Any]) -> None:
@@ -1632,10 +1652,10 @@ def _clamp_tun_mtu_for_proxy(
     if not enabled:
         return
     proxy_type = str(proxy.get("type") or "").strip().lower()
-    if proxy_type not in {"wireguard", "warp", "masque", "openvpn"}:
+    if proxy_type not in {"wireguard", "warp", "masque", "openvpn", "openvpn-client"}:
         return
     try:
-        endpoint_mtu = int(proxy.get("mtu") or (1500 if proxy_type == "openvpn" else 1280))
+        endpoint_mtu = int(proxy.get("mtu") or (1500 if proxy_type in {"openvpn", "openvpn-client"} else 1280))
     except (TypeError, ValueError):
         endpoint_mtu = 1280
     endpoint_mtu = max(576, min(endpoint_mtu, 9000))
@@ -2342,7 +2362,7 @@ def _replace_or_append_tagged(items: list[Any], tag: str, payload: dict[str, Any
 def _is_singbox_endpoint(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
-    return str(payload.get("type") or "").strip().lower() in {"warp", "wireguard"}
+    return str(payload.get("type") or "").strip().lower() in {"warp", "wireguard", "openvpn-client"}
 
 
 def _ensure_dict(parent: dict[str, Any], key: str) -> dict[str, Any]:

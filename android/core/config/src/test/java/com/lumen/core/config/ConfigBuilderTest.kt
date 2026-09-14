@@ -14,6 +14,33 @@ import java.util.Base64
 class ConfigBuilderTest {
 
     @Test
+    fun dnsBlockRespectsEarlierDomainException() {
+        val node = ParsedNode("test", "socks", "127.0.0.1", 1080, "",
+            mapOf("type" to "socks", "server" to "127.0.0.1", "server_port" to 1080))
+        val config = JSONObject(SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions(
+            tunMode = false,
+            directDomains = listOf("proxy:full:allowed.example.com", "block:domain:example.com")
+        )))
+        val rules = config.getJSONObject("dns").getJSONArray("rules")
+        val reject = (0 until rules.length()).map { rules.getJSONObject(it) }
+            .first { it.optString("action") == "reject" && it.optString("type") == "logical" }
+        assertEquals("logical", reject.getString("type"))
+        val exception = reject.getJSONArray("rules").getJSONObject(1)
+        assertTrue(exception.getBoolean("invert"))
+        assertEquals("allowed.example.com", exception.getJSONArray("rules")
+            .getJSONObject(0).getJSONArray("domain").getString(0))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun legacyOpenVpnUnknownCipherIsNotSilentlyDiscarded() {
+        val node = ParsedNode("test", "openvpn", "vpn.example", 443, "", mapOf(
+            "type" to "openvpn", "cipher" to "invalid-cipher",
+            "servers" to listOf(mapOf("server" to "vpn.example", "server_port" to 443))
+        ))
+        SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions(tunMode = false))
+    }
+
+    @Test
     fun testSingboxConfigBuilderVlessNode() {
         val node = ParsedNode(
             name = "Test VLESS REALITY",
@@ -614,10 +641,11 @@ class ConfigBuilderTest {
                 )
             )
         )
-        val outbounds = JSONObject(SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions()))
-            .getJSONArray("outbounds")
-        val proxyOb = outbounds.getJSONObject(0)
-        assertEquals("openvpn", proxyOb.getString("type"))
+        val root = JSONObject(SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions()))
+        val outbounds = root.getJSONArray("outbounds")
+        val endpoint = root.getJSONArray("endpoints").getJSONObject(0)
+        val proxyOb = endpoint
+        assertEquals("openvpn-client", proxyOb.getString("type"))
         assertTrue(!proxyOb.has("lumen_proxy"))
         val detourTag = proxyOb.getString("detour")
         val detour = (0 until outbounds.length())
@@ -651,9 +679,9 @@ class ConfigBuilderTest {
                 )
             )
         )
-        val outbounds = JSONObject(SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions()))
-            .getJSONArray("outbounds")
-        val proxyOb = outbounds.getJSONObject(0)
+        val root = JSONObject(SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions()))
+        val outbounds = root.getJSONArray("outbounds")
+        val proxyOb = root.getJSONArray("endpoints").getJSONObject(0)
         assertTrue(!proxyOb.has("lumen_proxy"))
         val detourTag = proxyOb.getString("detour")
         val detour = (0 until outbounds.length())
@@ -1689,6 +1717,34 @@ class ConfigBuilderTest {
     }
 
     @Test
+    fun userRouteRulesKeepTheirConfiguredOrderAcrossActionsAndKinds() {
+        val root = JSONObject(
+            SingboxConfigBuilder.buildConfig(
+                simpleNode(),
+                SingboxConfigOptions(
+                    tunMode = false,
+                    directDomains = listOf(
+                        "proxy:full:special.example.com",
+                        "direct:10.0.0.0/8",
+                        "block:domain:example.com"
+                    )
+                )
+            )
+        )
+        val rules = root.getJSONObject("route").getJSONArray("rules")
+        val userRules = (0 until rules.length())
+            .map { rules.getJSONObject(it) }
+            .filter { it.has("domain") || it.has("domain_suffix") || it.has("ip_cidr") }
+            .take(3)
+
+        assertEquals("proxy", userRules[0].getString("outbound"))
+        assertEquals("special.example.com", userRules[0].getJSONArray("domain").getString(0))
+        assertEquals("10.0.0.0/8", userRules[1].getJSONArray("ip_cidr").getString(0))
+        assertEquals("reject", userRules[2].getString("action"))
+        assertEquals("example.com", userRules[2].getJSONArray("domain_suffix").getString(0))
+    }
+
+    @Test
     fun tlsFragmentFallbackDelayIsTunable() {
         fun delay(options: SingboxConfigOptions): String {
             val rules = JSONObject(SingboxConfigBuilder.buildConfig(simpleNode(), options))
@@ -1906,8 +1962,8 @@ class ConfigBuilderTest {
             val node = LinkParser.parseOpenVpnConfig(profile)
             val proxy = JSONObject(
                 SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions(tunMode = false))
-            ).getJSONArray("outbounds").getJSONObject(0)
-            assertEquals("openvpn", proxy.getString("type"))
+            ).getJSONArray("endpoints").getJSONObject(0)
+            assertEquals("openvpn-client", proxy.getString("type"))
         }
     }
 
@@ -1927,14 +1983,14 @@ class ConfigBuilderTest {
         val node = LinkParser.parseOpenVpnConfig(profile)
         val proxy = JSONObject(
             SingboxConfigBuilder.buildConfig(node, SingboxConfigOptions(tunMode = false))
-        ).getJSONArray("outbounds").getJSONObject(0)
-        assertEquals("openvpn", proxy.getString("type"))
+        ).getJSONArray("endpoints").getJSONObject(0)
+        assertEquals("openvpn-client", proxy.getString("type"))
         assertTrue(!proxy.has("username"))
         assertTrue(!proxy.has("password"))
     }
 
     @Test
-    fun nativeOpenVpnJsonIsSanitizedForExtended252() {
+    fun nativeOpenVpnJsonIsMigratedToCurrentEndpointSchema() {
         val native = ParsedNode(
             name = "Imported native OpenVPN",
             scheme = "openvpn",
@@ -1946,8 +2002,8 @@ class ConfigBuilderTest {
                     "type" to "openvpn",
                     "servers" to listOf(mapOf("server" to "ovpn.example.com", "server_port" to 443)),
                     "proto" to "tcp6",
-                    "cipher" to "BF-CBC",
-                    "auth" to "BLAKE2",
+                    "cipher" to "AES-256-GCM",
+                    "auth" to "SHA256",
                     "tls_auth" to "inline-key",
                     "tls" to mapOf(
                         "ca" to "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
@@ -1962,14 +2018,14 @@ class ConfigBuilderTest {
 
         val proxy = JSONObject(
             SingboxConfigBuilder.buildConfig(native, SingboxConfigOptions(tunMode = false))
-        ).getJSONArray("outbounds").getJSONObject(0)
-        assertEquals("tcp", proxy.getString("proto"))
+        ).getJSONArray("endpoints").getJSONObject(0)
+        assertEquals("tcp6", proxy.getString("network"))
         assertTrue(!proxy.has("cipher"))
-        assertTrue(!proxy.has("auth"))
-        assertEquals(-1, proxy.getInt("key_direction"))
-        val suites = proxy.getJSONObject("tls").getJSONArray("cipher_suites")
-        assertEquals(1, suites.length())
-        assertEquals("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", suites.getString(0))
+        assertEquals("SHA256", proxy.getString("auth"))
+        assertTrue(!proxy.has("key_direction"))
+        val tls = proxy.getJSONObject("tls")
+        assertEquals("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", tls.getString("cipher"))
+        assertEquals("tls_auth", tls.getJSONObject("control_wrap").getString("type"))
     }
 
     @Test
@@ -1997,7 +2053,7 @@ class ConfigBuilderTest {
     }
 
     @Test
-    fun openVpnUdpProfilesAreRejectedBecauseTheCoreCannotFragmentTheHandshake() {
+    fun openVpnUdpProfilesBuildNativeEndpoints() {
         fun buildFor(proto: String): Result<String> = runCatching {
             SingboxConfigBuilder.buildConfig(
                 ParsedNode(
@@ -2020,17 +2076,13 @@ class ConfigBuilderTest {
             )
         }
 
-        // The control channel sends the certificate chain in one oversized datagram and
-        // the core has no --fragment/--mssfix, so the handshake can only fail with
-        // `write: message too long`. Refuse instead of pretending to connect.
-        val error = buildFor("udp").exceptionOrNull()
-        assertTrue(error is IllegalArgumentException)
-        assertTrue(error?.message.orEmpty().contains("OpenVPN over UDP is not supported"))
-        // TCP profiles stream and are unaffected.
-        val proxy = JSONObject(buildFor("tcp").getOrThrow())
-            .getJSONArray("outbounds").getJSONObject(0)
-        assertEquals("tcp", proxy.getString("proto"))
-        assertTrue(!proxy.has("udp_fragment"))
+        val udp = JSONObject(buildFor("udp").getOrThrow())
+            .getJSONArray("endpoints").getJSONObject(0)
+        assertEquals("openvpn-client", udp.getString("type"))
+        assertEquals("udp", udp.getString("network"))
+        val tcp = JSONObject(buildFor("tcp").getOrThrow())
+            .getJSONArray("endpoints").getJSONObject(0)
+        assertEquals("tcp", tcp.getString("network"))
     }
 
     @Test
@@ -2187,6 +2239,12 @@ class ConfigBuilderTest {
         val rules = route.getJSONArray("rules")
         assertTrue((0 until rules.length()).any { index ->
             val rule = rules.getJSONObject(index)
+            rule.optString("action") == "reject" &&
+                rule.optJSONArray("rule_set")?.optString(0) == "geosite-category-ads-all"
+        })
+        val dnsRules = root.getJSONObject("dns").getJSONArray("rules")
+        assertTrue((0 until dnsRules.length()).any { index ->
+            val rule = dnsRules.getJSONObject(index)
             rule.optString("action") == "reject" &&
                 rule.optJSONArray("rule_set")?.optString(0) == "geosite-category-ads-all"
         })
@@ -2438,7 +2496,7 @@ class ConfigBuilderTest {
     }
 
     @Test
-    fun routingIsFailClosedOrderedAndDropsInvalidMatchers() {
+    fun routingKeepsVisibleOrderAndDropsInvalidMatchers() {
         val root = JSONObject(
             SingboxConfigBuilder.buildConfig(
                 simpleNode(),
@@ -2478,8 +2536,8 @@ class ConfigBuilderTest {
             it.optString("outbound") == "direct" &&
                 it.optJSONArray("domain_suffix")?.optString(0) == "example.test"
         }
-        assertTrue(rejectIp >= 0 && rejectIp < directIp)
-        assertTrue(rejectDomain >= 0 && rejectDomain < directDomain)
+        assertTrue(directIp >= 0 && directIp < rejectIp)
+        assertTrue(directDomain >= 0 && directDomain < rejectDomain)
         assertTrue(root.toString().contains("api.example.test"))
         assertTrue(!root.toString().contains("300.1.1.1"))
         assertTrue(!root.toString().contains("lookbehind"))

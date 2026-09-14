@@ -35,12 +35,40 @@ object LinkParser {
             "https|http|happ|snell|juicity|anytls)://"
     )
     // The extended core types the AmneziaWG options: jc/jmin/jmax/s1..s4/itime are
-    // integers, h1..h4 are uint32 ranges and the AWG 2.0 packet definitions
-    // i1..i5/j1..j3 must stay strings ("cannot unmarshal number into ... i1").
+    // integers, header-protection and packet definitions are strings, and the
+    // remaining AWG 3.x timing/padding values are uint32 ranges.
     private val AMNEZIA_INT_KEYS = setOf("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "itime")
-    private val AMNEZIA_RANGE_KEYS = setOf("h1", "h2", "h3", "h4")
-    private val AMNEZIA_STR_KEYS = setOf("i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3")
+    private val AMNEZIA_RANGE_KEYS = setOf(
+        "h1", "h2", "h3", "h4",
+        "content_padding_addition", "rekey_after_time", "rekey_timeout",
+        "reject_after_time", "keepalive_timeout", "max_handshake_attempts"
+    )
+    private val AMNEZIA_STR_KEYS = setOf(
+        "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3",
+        "header_protection_key"
+    )
     private val AMNEZIA_JUNK_KEYS = AMNEZIA_INT_KEYS + AMNEZIA_RANGE_KEYS + AMNEZIA_STR_KEYS
+
+    /** Maps .conf, URI and Clash spelling variants onto sing-box-extended JSON keys. */
+    private fun canonicalAmneziaKey(rawKey: Any?): String? {
+        val compact = rawKey?.toString()?.trim()?.lowercase()
+            ?.replace("_", "")?.replace("-", "") ?: return null
+        return AMNEZIA_JUNK_KEYS.firstOrNull { candidate ->
+            candidate.replace("_", "") == compact
+        }
+    }
+
+    private fun amneziaOptionsFrom(vararg maps: Map<*, *>): Map<String, Any?> {
+        val values = linkedMapOf<String, Any?>()
+        maps.forEach { map ->
+            map.forEach { (rawKey, value) ->
+                canonicalAmneziaKey(rawKey)?.let { key ->
+                    amneziaValue(key, value)?.let { values[key] = it }
+                }
+            }
+        }
+        return values
+    }
 
     // A happ crypt link may hide a subscription URL instead of a node; it has to
     // go through the subscription fetch (parity with desktop node_service).
@@ -1482,10 +1510,7 @@ object LinkParser {
             throw LinkParseError("wireguard link must contain a private key, a peer public key and an interface address")
         }
 
-        val amneziaMap = mutableMapOf<String, Any?>()
-        for (junkKey in AMNEZIA_JUNK_KEYS) {
-            amneziaValue(junkKey, params[junkKey])?.let { amneziaMap[junkKey] = it }
-        }
+        val amneziaMap = amneziaOptionsFrom(params)
         val isAwg = link.lowercase().startsWith("awg://") || link.lowercase().startsWith("amneziawg://") || amneziaMap.isNotEmpty()
 
         // Optional peer/interface parameters: dropping them silently broke
@@ -1582,8 +1607,8 @@ object LinkParser {
                     "mtu" -> mtu = value.toIntOrNull() ?: 0
                     "dns" -> dnsList.addAll(value.split(",").map { it.trim() }.filter { it.isNotEmpty() })
                     "name" -> if (value.isNotEmpty()) profileName = value
-                    in AMNEZIA_JUNK_KEYS -> {
-                        amneziaValue(key, value)?.let { amneziaMap[key] = it }
+                    else -> canonicalAmneziaKey(key)?.let { canonical ->
+                        amneziaValue(canonical, value)?.let { amneziaMap[canonical] = it }
                     }
                 }
             } else if (currentSection == "peer") {
@@ -1660,6 +1685,9 @@ object LinkParser {
 
     private val OPENVPN_INLINE_BLOCK_REGEX = Regex(
         "(?ims)^[ \\t]*<(ca|cert|key|tls-auth|tls-crypt|tls-crypt-v2|auth-user-pass|askpass)>[ \\t]*\\r?\\n(.*?)^[ \\t]*</\\1>[ \\t]*$"
+    )
+    private val OPENVPN_CONNECTION_BLOCK_REGEX = Regex(
+        "(?ims)^[ \\t]*<connection>[ \\t]*\\r?\\n(.*?)^[ \\t]*</connection>[ \\t]*$"
     )
     // `askpass` is supported as long as the passphrase itself is inline: an
     // encrypted <key> is useless without it and many providers ship one.
@@ -1780,26 +1808,25 @@ object LinkParser {
         val normalizedText = text.replace("\r\n", "\n").replace("\r", "\n")
 
         val inline = mutableMapOf<String, String>()
-        val directivesText = OPENVPN_INLINE_BLOCK_REGEX.replace(normalizedText) { match ->
+        var directivesText = OPENVPN_INLINE_BLOCK_REGEX.replace(normalizedText) { match ->
             val tag = match.groupValues[1].lowercase()
             val body = match.groupValues[2].trim('\r', '\n')
             inline[tag] = if (body.isEmpty()) "" else body + "\n"
             ""
         }
 
-        val byKey = mutableMapOf<String, MutableList<List<String>>>()
-        for (rawLine in directivesText.lines()) {
-            val strippedLine = rawLine.trim()
-            if (strippedLine.isEmpty() || strippedLine.startsWith("#") || strippedLine.startsWith(";")) continue
-            val tokens = tokenizeOpenVpnLine(strippedLine)
-            if (tokens.isEmpty()) continue
-            val key = tokens[0].trimStart('-').trim().lowercase()
-            if (key.isEmpty()) continue
-            byKey.getOrPut(key) { mutableListOf() }.add(tokens.drop(1))
+        val connectionBodies = mutableListOf<String>()
+        directivesText = OPENVPN_CONNECTION_BLOCK_REGEX.replace(directivesText) { match ->
+            connectionBodies += match.groupValues[1]
+            ""
         }
+        val byKey = parseOpenVpnDirectives(directivesText)
+        val connectionMaps = connectionBodies.map(::parseOpenVpnDirectives)
 
         for (key in OPENVPN_UNSAFE_DIRECTIVES) {
-            if (key in byKey) throw LinkParseError("OpenVPN directive `$key` is not supported by sing-box extended")
+            if (key in byKey || connectionMaps.any { key in it }) {
+                throw LinkParseError("OpenVPN directive `$key` is not supported by sing-box extended")
+            }
         }
         val dev = openVpnLastArg(byKey, "dev").lowercase()
         if (dev.startsWith("tap")) throw LinkParseError("OpenVPN TAP profiles are not supported; a TUN profile is required")
@@ -1816,32 +1843,28 @@ object LinkParser {
 
         val globalProto = normalizeOpenVpnProto(openVpnLastArg(byKey, "proto").ifEmpty { "udp" })
         val remotes = mutableListOf<Pair<String, Map<String, Any?>>>()
-        for (values in byKey["remote"] ?: emptyList()) {
-            if (values.isEmpty()) continue
-            val server = values[0].trim()
-            if (server.isEmpty()) continue
-            val portText = values.getOrNull(1)?.trim() ?: "1194"
-            val port = portText.toIntOrNull()?.takeIf { it in 1..65535 }
-                ?: throw LinkParseError("invalid OpenVPN remote port `$portText`")
-            val remoteProto = values.getOrNull(2)?.let { normalizeOpenVpnProto(it) } ?: globalProto
-            remotes.add(remoteProto to mapOf("server" to server, "server_port" to port))
+        fun appendRemotes(source: Map<String, MutableList<List<String>>>, defaultProto: String) {
+            val localProto = normalizeOpenVpnProto(openVpnLastArg(source, "proto").ifEmpty { defaultProto })
+            for (values in source["remote"] ?: emptyList()) {
+                if (values.isEmpty()) continue
+                val server = values[0].trim()
+                if (server.isEmpty()) continue
+                val portText = values.getOrNull(1)?.trim() ?: "1194"
+                val port = portText.toIntOrNull()?.takeIf { it in 1..65535 }
+                    ?: throw LinkParseError("invalid OpenVPN remote port `$portText`")
+                val remoteProto = values.getOrNull(2)?.let { normalizeOpenVpnProto(it) } ?: localProto
+                remotes.add(remoteProto to mapOf(
+                    "server" to server,
+                    "server_port" to port,
+                    "network" to remoteProto
+                ))
+            }
         }
+        appendRemotes(byKey, globalProto)
+        connectionMaps.forEach { appendRemotes(it, globalProto) }
         if (remotes.isEmpty()) throw LinkParseError("OpenVPN profile does not contain a usable `remote` server")
-        // The bundled core implements neither --fragment nor --mssfix, and its
-        // `udp_fragment` dial option does not clear the kernel DF bit, so a UDP control
-        // channel always dies on the oversized certificate datagram with
-        // `write: message too long`. A profile that also lists TCP remotes carries the
-        // very same credentials, so keep those and drop the UDP ones instead of failing
-        // the import.
-        val tcpRemotes = remotes.filter { it.first == "tcp" }
-        val selected = if (tcpRemotes.isNotEmpty()) tcpRemotes else remotes
-        val proto = selected.first().first
-        if (proto != "tcp") {
-            throw LinkParseError(
-                "OpenVPN over UDP is not supported by this core; import the TCP variant of this profile"
-            )
-        }
-        val servers = selected.map { it.second }
+        val proto = remotes.first().first
+        val servers = remotes.map { it.second }
 
         val native = mutableMapOf<String, Any?>(
             "type" to "openvpn",
@@ -1851,6 +1874,7 @@ object LinkParser {
             "servers" to servers,
             "proto" to proto
         )
+        if ("remote-random" in byKey) native["remote_random"] = true
 
         // "Use proxy": http-proxy/socks-proxy are standard directives, obfs2/obfs3
         // travel in a Lumen comment. The builder turns this into a detour outbound
@@ -1862,6 +1886,21 @@ object LinkParser {
         val auth = openVpnLastArg(byKey, "auth")
         if (auth.isNotEmpty() && auth.lowercase() != "none") {
             OpenVpnConfigNormalizer.normalizeAuthDigest(auth)?.let { native["auth"] = it }
+        }
+        for ((directive, nativeKey) in listOf("mssfix" to "mss_fix", "fragment" to "fragment")) {
+            val value = openVpnLastArg(byKey, directive)
+            if (value.isNotEmpty()) {
+                val parsed = value.toIntOrNull()?.takeIf { it > 0 || (directive == "mssfix" && it == 0) }
+                    ?: throw LinkParseError("invalid OpenVPN `$directive` value `$value`")
+                if (directive == "mssfix" && parsed == 0) native["mss_fix_disabled"] = true
+                else native[nativeKey] = parsed
+            }
+        }
+        val explicitExitNotify = openVpnLastArg(byKey, "explicit-exit-notify")
+            .ifEmpty { if ("explicit-exit-notify" in byKey) "1" else "" }
+        if (explicitExitNotify.isNotEmpty()) {
+            native["explicit_exit_notify"] = explicitExitNotify.toIntOrNull()?.takeIf { it >= 0 }
+                ?: throw LinkParseError("invalid OpenVPN `explicit-exit-notify` value `$explicitExitNotify`")
         }
 
         val credentials = inline["auth-user-pass"] ?: ""
@@ -1941,6 +1980,10 @@ object LinkParser {
             tls["verify_x509_name"] = verifyValues[0]
             if (verifyValues.size > 1) tls["verify_x509_name_mode"] = openVpnVerifyNameMode(verifyValues[1])
         }
+        val remoteCertificateTls = openVpnLastArg(byKey, "remote-cert-tls").lowercase()
+        if (remoteCertificateTls in setOf("server", "client")) {
+            tls["remote_certificate_tls"] = remoteCertificateTls
+        }
         if ((tls["ca"] as? String).isNullOrEmpty()) {
             throw LinkParseError("OpenVPN profile does not contain a CA certificate supported by this core")
         }
@@ -1970,6 +2013,20 @@ object LinkParser {
             link = text,
             outbound = outbound
         )
+    }
+
+    private fun parseOpenVpnDirectives(text: String): MutableMap<String, MutableList<List<String>>> {
+        val byKey = mutableMapOf<String, MutableList<List<String>>>()
+        for (rawLine in text.lines()) {
+            val strippedLine = rawLine.trim()
+            if (strippedLine.isEmpty() || strippedLine.startsWith("#") || strippedLine.startsWith(";")) continue
+            val tokens = tokenizeOpenVpnLine(strippedLine)
+            if (tokens.isEmpty()) continue
+            val key = tokens[0].trimStart('-').trim().lowercase()
+            if (key.isEmpty()) continue
+            byKey.getOrPut(key) { mutableListOf() }.add(tokens.drop(1))
+        }
+        return byKey
     }
 
     private fun tokenizeOpenVpnLine(line: String): List<String> {
@@ -2174,8 +2231,7 @@ object LinkParser {
         // `reserved` is a plain WireGuard/WARP field, not an AmneziaWG obfuscation
         // parameter, so it must not promote the entry to AWG. Clash keeps the real
         // obfuscation knobs in the nested `amnezia-wg-option` block.
-        val hasAmneziaParams = map.keys.any { it.toString().lowercase() in AMNEZIA_JUNK_KEYS } ||
-            clashAmneziaOptions(map).keys.any { it?.toString()?.lowercase() in AMNEZIA_JUNK_KEYS }
+        val hasAmneziaParams = amneziaOptionsFrom(map, clashAmneziaOptions(map)).isNotEmpty()
         val scheme = if (rawType == "awg" || rawType == "amneziawg" || rawType == "amnezia-wg" || (rawType in setOf("wg", "wireguard") && hasAmneziaParams)) "awg" else when (rawType) {
             "shadowsocks" -> "ss"
             "hy2" -> "hysteria2"
@@ -2569,12 +2625,7 @@ object LinkParser {
 
                     val amneziaOpts = clashAmneziaOptions(map)
 
-                    val amneziaMap = mutableMapOf<String, Any?>()
-                    for (junkKey in AMNEZIA_JUNK_KEYS) {
-                        amneziaValue(junkKey, map[junkKey] ?: amneziaOpts[junkKey])?.let {
-                            amneziaMap[junkKey] = it
-                        }
-                    }
+                    val amneziaMap = amneziaOptionsFrom(map, amneziaOpts)
                     val isAwg = scheme == "awg" || amneziaMap.isNotEmpty()
                     val actualScheme = if (isAwg) "awg" else "wireguard"
 
@@ -3167,9 +3218,10 @@ object LinkParser {
             when (protocol) {
                 "hy" -> { protocol = "hysteria"; native["type"] = "hysteria" }
                 "hy2" -> { protocol = "hysteria2"; native["type"] = "hysteria2" }
-                "openvpn" -> {
+                "openvpn", "openvpn-client" -> {
                     native["system"] = false
                     native["name"] = native["name"]?.toString()?.takeIf { it.isNotBlank() } ?: "openvpn0"
+                    protocol = "openvpn"
                 }
             }
             if (protocol == "wireguard" && native["amnezia"] is Map<*, *>) protocol = "awg"

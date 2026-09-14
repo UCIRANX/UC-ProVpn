@@ -216,7 +216,12 @@ direct:10.0.0.0/8
 direct:172.16.0.0/12
 direct:192.168.0.0/16
 direct:127.0.0.0/8
+direct:169.254.0.0/16
+direct:224.0.0.0/4
+direct:::1/128
 direct:fc00::/7
+direct:fe80::/10
+direct:ff00::/8
 direct:geosite:category-ru
 direct:geoip:ru
 """.trimIndent()
@@ -396,6 +401,14 @@ data class NodeDraft(
     val j2: String = "",
     val j3: String = "",
     val itime: String = "",
+    // AWG 3.x header protection and lifecycle ranges.
+    val headerProtectionKey: String = "",
+    val contentPaddingAddition: String = "",
+    val rekeyAfterTime: String = "",
+    val rekeyTimeout: String = "",
+    val rejectAfterTime: String = "",
+    val keepaliveTimeout: String = "",
+    val maxHandshakeAttempts: String = "",
     val obfs: String = "",
     val obfsPassword: String = "",
     val congestionControl: String = "bbr",

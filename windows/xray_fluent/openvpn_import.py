@@ -16,6 +16,9 @@ _INLINE_BLOCK_RE = re.compile(
     r"(?ims)^\s*<(?P<tag>ca|cert|key|tls-auth|tls-crypt|tls-crypt-v2|auth-user-pass|askpass)>\s*\r?\n"
     r"(?P<body>.*?)^\s*</(?P=tag)>\s*$"
 )
+_CONNECTION_BLOCK_RE = re.compile(
+    r"(?ims)^\s*<connection>\s*\r?\n(?P<body>.*?)^\s*</connection>\s*$"
+)
 _UNSAFE_UNSUPPORTED_DIRECTIVES = {
     "http-proxy-user-pass",
     "pkcs12",
@@ -59,8 +62,83 @@ def parse_openvpn_config(
         return ""
 
     directives_text = _INLINE_BLOCK_RE.sub(collect_block, text)
+    connection_blocks: list[str] = []
+
+    def collect_connection(match: re.Match[str]) -> str:
+        connection_blocks.append(match.group("body"))
+        return ""
+
+    directives_text = _CONNECTION_BLOCK_RE.sub(collect_connection, directives_text)
+    directives = _parse_directives(directives_text)
+
+    by_key: dict[str, list[list[str]]] = {}
+    for key, values in directives:
+        by_key.setdefault(key, []).append(values)
+
+    connection_maps: list[dict[str, list[list[str]]]] = []
+    for block in connection_blocks:
+        block_map: dict[str, list[list[str]]] = {}
+        for key, values in _parse_directives(block):
+            block_map.setdefault(key, []).append(values)
+        connection_maps.append(block_map)
+
+    for key in _UNSAFE_UNSUPPORTED_DIRECTIVES:
+        if key in by_key or any(key in block for block in connection_maps):
+            raise ValueError(f"OpenVPN directive `{key}` is not supported by sing-box extended")
+
+    dev = _last_arg(by_key, "dev").lower()
+    if dev.startswith("tap"):
+        raise ValueError("OpenVPN TAP profiles are not supported; a TUN profile is required")
+    for key in ("compress", "comp-lzo"):
+        value = _last_arg(by_key, key).lower()
+        if value and value not in {"no", "disable", "stub", "stub-v2"}:
+            raise ValueError(f"OpenVPN compression `{value}` is not supported")
+
+    global_proto = _normalize_proto(_last_arg(by_key, "proto") or "udp")
+    remotes: list[tuple[str, dict[str, Any]]] = []
+
+    def append_remotes(source: dict[str, list[list[str]]], default_proto: str) -> None:
+        local_proto = _normalize_proto(_last_arg(source, "proto") or default_proto)
+        for values in source.get("remote", []):
+            if not values:
+                continue
+            server = values[0].strip()
+            if not server:
+                continue
+            port = _positive_port(values[1] if len(values) > 1 else "1194")
+            remote_proto = _normalize_proto(values[2]) if len(values) > 2 else local_proto
+            remotes.append((remote_proto, {
+                "server": server,
+                "server_port": port,
+                "network": remote_proto,
+            }))
+
+    append_remotes(by_key, global_proto)
+    for connection in connection_maps:
+        append_remotes(connection, global_proto)
+    if not remotes:
+        raise ValueError("OpenVPN profile does not contain a usable `remote` server")
+    proto = remotes[0][0]
+    servers = [remote[1] for remote in remotes]
+
+    native: dict[str, Any] = {
+        "type": "openvpn",
+        "tag": "proxy",
+        "system": False,
+        "name": "openvpn0",
+        "servers": servers,
+        "proto": proto,
+    }
+    if "remote-random" in by_key:
+        native["remote_random"] = True
+
+    # Continue with the common profile fields below.
+    return _finish_openvpn_profile(native, inline, by_key, text, source_path, servers)
+
+
+def _parse_directives(text: str) -> list[tuple[str, list[str]]]:
     directives: list[tuple[str, list[str]]] = []
-    for line_number, raw_line in enumerate(directives_text.splitlines(), start=1):
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
         stripped = raw_line.strip()
         if not stripped or stripped.startswith(("#", ";")):
             continue
@@ -72,52 +150,17 @@ def parse_openvpn_config(
             continue
         key = tokens[0].lstrip("-").strip().lower()
         directives.append((key, tokens[1:]))
+    return directives
 
-    by_key: dict[str, list[list[str]]] = {}
-    for key, values in directives:
-        by_key.setdefault(key, []).append(values)
 
-    for key in _UNSAFE_UNSUPPORTED_DIRECTIVES:
-        if key in by_key:
-            raise ValueError(f"OpenVPN directive `{key}` is not supported by sing-box extended")
-    dev = _last_arg(by_key, "dev").lower()
-    if dev.startswith("tap"):
-        raise ValueError("OpenVPN TAP profiles are not supported; a TUN profile is required")
-    for key in ("compress", "comp-lzo"):
-        value = _last_arg(by_key, key).lower()
-        if value and value not in {"no", "disable", "stub", "stub-v2"}:
-            raise ValueError(f"OpenVPN compression `{value}` is not supported")
-
-    global_proto = _normalize_proto(_last_arg(by_key, "proto") or "udp")
-    remotes: list[tuple[str, dict[str, Any]]] = []
-    for values in by_key.get("remote", []):
-        if not values:
-            continue
-        server = values[0].strip()
-        if not server:
-            continue
-        port = _positive_port(values[1] if len(values) > 1 else "1194")
-        remote_proto = _normalize_proto(values[2]) if len(values) > 2 else global_proto
-        remotes.append((remote_proto, {"server": server, "server_port": port}))
-    if not remotes:
-        raise ValueError("OpenVPN profile does not contain a usable `remote` server")
-    tcp_remotes = [remote for remote in remotes if remote[0] == "tcp"]
-    selected = tcp_remotes or remotes
-    proto = selected[0][0]
-    if proto != "tcp":
-        raise ValueError(
-            "OpenVPN over UDP is not supported by this core; import the TCP variant of this profile"
-        )
-    servers = [remote[1] for remote in selected]
-
-    native: dict[str, Any] = {
-        "type": "openvpn",
-        "tag": "proxy",
-        "system": False,
-        "name": "openvpn0",
-        "servers": servers,
-        "proto": proto,
-    }
+def _finish_openvpn_profile(
+    native: dict[str, Any],
+    inline: dict[str, str],
+    by_key: dict[str, list[list[str]]],
+    text: str,
+    source_path: Path | None,
+    servers: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[str], str]:
     if "auth-user-pass" in by_key or "auth-user-pass" in inline:
         native["lumen_requires_user_auth"] = True
 
@@ -133,6 +176,19 @@ def parse_openvpn_config(
         normalized_auth = normalize_auth_digest(auth)
         if normalized_auth:
             native["auth"] = normalized_auth
+
+    for directive, native_key in (("mssfix", "mss_fix"), ("fragment", "fragment")):
+        value = _last_arg(by_key, directive)
+        if value:
+            parsed = _positive_integer(value, directive, allow_zero=directive == "mssfix")
+            if directive == "mssfix" and parsed == 0:
+                native["mss_fix_disabled"] = True
+            else:
+                native[native_key] = parsed
+    explicit_exit_notify = _last_arg(by_key, "explicit-exit-notify")
+    if "explicit-exit-notify" in by_key:
+        explicit_exit_notify = explicit_exit_notify or "1"
+        native["explicit_exit_notify"] = _positive_integer(explicit_exit_notify, "explicit-exit-notify", allow_zero=True)
 
     credentials = inline.get("auth-user-pass", "")
     auth_user_pass = _last_values(by_key, "auth-user-pass")
@@ -207,6 +263,9 @@ def parse_openvpn_config(
         tls["verify_x509_name"] = verify_values[0]
         if len(verify_values) > 1:
             tls["verify_x509_name_mode"] = _verify_name_mode(verify_values[1])
+    remote_cert_tls = _last_arg(by_key, "remote-cert-tls").lower()
+    if remote_cert_tls in {"server", "client"}:
+        tls["remote_certificate_tls"] = remote_cert_tls
     if not tls.get("ca"):
         raise ValueError("OpenVPN profile does not contain a CA certificate supported by this core")
     native["tls"] = tls
@@ -220,6 +279,16 @@ def parse_openvpn_config(
 
     profile_name = source_path.stem if source_path is not None else f"OpenVPN {servers[0]['server']}"
     return native, dns_servers, profile_name
+
+
+def _positive_integer(value: str, directive: str, *, allow_zero: bool = False) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid OpenVPN `{directive}` value: {value}") from exc
+    if parsed < (0 if allow_zero else 1):
+        raise ValueError(f"invalid OpenVPN `{directive}` value: {value}")
+    return parsed
 
 
 def _last_values(by_key: dict[str, list[list[str]]], key: str) -> list[str]:

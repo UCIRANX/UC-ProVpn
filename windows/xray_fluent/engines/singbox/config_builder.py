@@ -104,13 +104,16 @@ def build_singbox_outbound(
         )
 
     outbound["tag"] = tag
-    if str(outbound.get("type") or "").strip().lower() == "openvpn":
+    if str(outbound.get("type") or "").strip().lower() in {"openvpn", "openvpn-client"}:
         requires_user_auth = bool(outbound.pop("lumen_requires_user_auth", False)) or openvpn_requires_user_auth(
             str(getattr(node, "link", "") or "")
         )
+        key_password = str(outbound.get("key_password") or "").strip()
         normalize_openvpn_outbound(outbound)
-        if openvpn_private_key_is_encrypted(outbound) and not str(outbound.get("key_password") or "").strip():
-            raise ValueError("OpenVPN private key is encrypted and requires a private key password")
+        if openvpn_private_key_is_encrypted(outbound):
+            if not key_password:
+                raise ValueError("OpenVPN private key is encrypted and requires a private key password")
+            raise ValueError("Encrypted OpenVPN private keys are not supported by the current core")
         if requires_user_auth:
             username = str(outbound.get("username") or "").strip()
             password = str(outbound.get("password") or "").strip()
@@ -131,7 +134,7 @@ def _convert_outbound(xray_ob: dict[str, Any], *, tag: str = "proxy") -> dict[st
     if isinstance(native, dict):
         sb = deepcopy(native)
         sb = normalize_wireguard_endpoint(sb)
-        if str(sb.get("type") or "").strip().lower() == "openvpn":
+        if str(sb.get("type") or "").strip().lower() in {"openvpn", "openvpn-client"}:
             sb["system"] = False
             sb["name"] = str(sb.get("name") or "openvpn0")
         sb["tag"] = tag

@@ -3,6 +3,8 @@ package com.lumen.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,12 +19,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -35,15 +39,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.lumen.ui.components.LumenDialog
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 data class DomainRuleItem(
     val address: String,
@@ -80,23 +92,17 @@ private fun serializeRules(rules: List<DomainRuleItem>): String =
         "$prefix:${rule.address}"
     }
 
-private fun isIpAddressRule(address: String): Boolean {
-    val value = address.trim().lowercase()
-    if (value.startsWith("geoip:") || value.startsWith("geosite:")) return false
-    if (value.startsWith("full:") || value.startsWith("domain:") ||
-        value.startsWith("keyword:") || value.startsWith("regexp:") ||
-        value.startsWith("regex:")
-    ) return false
-    return value.contains('/') ||
-        (value.isNotEmpty() && value.all { it.isDigit() || it == '.' || it == ':' })
-}
-
 private val LAN_PRESET = listOf(
     DomainRuleItem("10.0.0.0/8", "direct"),
     DomainRuleItem("172.16.0.0/12", "direct"),
     DomainRuleItem("192.168.0.0/16", "direct"),
     DomainRuleItem("127.0.0.0/8", "direct"),
-    DomainRuleItem("fc00::/7", "direct")
+    DomainRuleItem("169.254.0.0/16", "direct"),
+    DomainRuleItem("224.0.0.0/4", "direct"),
+    DomainRuleItem("::1/128", "direct"),
+    DomainRuleItem("fc00::/7", "direct"),
+    DomainRuleItem("fe80::/10", "direct"),
+    DomainRuleItem("ff00::/8", "direct")
 )
 
 private val ADS_PRESET = listOf(
@@ -113,17 +119,31 @@ fun DomainRoutingScreen(
 ) {
     val s = LocalStrings.current
     val clipboard = LocalClipboardManager.current
+    val density = LocalDensity.current
     var newAddressInput by remember { mutableStateOf("") }
     var selectedAction by remember { mutableStateOf("direct") }
     var editingRule by remember { mutableStateOf<DomainRuleItem?>(null) }
-    val rules = remember(directDomains, directIpCidrs) {
-        (parseRulesString(directDomains) + parseRulesString(directIpCidrs))
-            .distinctBy { it.address.lowercase() }
+    var rules by remember(directDomains, directIpCidrs) {
+        mutableStateOf(
+            (parseRulesString(directDomains) + parseRulesString(directIpCidrs))
+                .distinctBy { it.address.lowercase() }
+        )
     }
+    val listState = rememberLazyListState()
+    val dragScope = rememberCoroutineScope()
+    var draggedRuleKey by remember { mutableStateOf<String?>(null) }
+    var draggedOffsetY by remember { mutableStateOf(0f) }
+    var dragPointerY by remember { mutableStateOf(0f) }
+    var dragStartRules by remember { mutableStateOf<List<DomainRuleItem>?>(null) }
+    var autoScrollJob by remember { mutableStateOf<Job?>(null) }
+
+    fun ruleKey(rule: DomainRuleItem): String = "rule:${rule.address.lowercase()}"
 
     fun updateRules(newRules: List<DomainRuleItem>) {
-        val (ipRules, domainRules) = newRules.partition { isIpAddressRule(it.address) }
-        onDirectRulesChange(serializeRules(domainRules), serializeRules(ipRules))
+        // Both fields are accepted for migration, but one ordered stream is persisted.
+        // Splitting IP and domain entries made cross-type ordering impossible.
+        rules = newRules
+        onDirectRulesChange(serializeRules(newRules), "")
     }
 
     fun isPresetActive(preset: List<DomainRuleItem>): Boolean =
@@ -134,7 +154,8 @@ fun DomainRoutingScreen(
     fun togglePreset(preset: List<DomainRuleItem>) {
         val addresses = preset.map { it.address.lowercase() }.toSet()
         val withoutPreset = rules.filterNot { it.address.lowercase() in addresses }
-        updateRules(if (isPresetActive(preset)) withoutPreset else withoutPreset + preset)
+        // A newly enabled preset should take effect before broader custom rules.
+        updateRules(if (isPresetActive(preset)) withoutPreset else preset + withoutPreset)
     }
 
     fun addRule(address: String, action: String) {
@@ -147,7 +168,64 @@ fun DomainRoutingScreen(
         newAddressInput = ""
     }
 
+    fun startRuleDrag(activeKey: String, localPointerY: Float) {
+        val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == activeKey } ?: return
+        draggedRuleKey = activeKey
+        draggedOffsetY = 0f
+        dragPointerY = item.offset + localPointerY
+        dragStartRules = rules
+    }
+
+    fun dragRuleBy(activeKey: String, amountY: Float) {
+        if (draggedRuleKey != activeKey) return
+        draggedOffsetY += amountY
+        dragPointerY += amountY
+
+        val layoutInfo = listState.layoutInfo
+        val currentInfo = layoutInfo.visibleItemsInfo.firstOrNull { it.key == activeKey } ?: return
+        val draggedCenter = currentInfo.offset + currentInfo.size / 2f + draggedOffsetY
+        val targetInfo = layoutInfo.visibleItemsInfo.firstOrNull { info ->
+            val key = info.key as? String
+            key?.startsWith("rule:") == true && key != activeKey &&
+                draggedCenter >= info.offset && draggedCenter <= info.offset + info.size
+        }
+        if (targetInfo != null) {
+            val fromIndex = rules.indexOfFirst { ruleKey(it) == activeKey }
+            val toIndex = rules.indexOfFirst { ruleKey(it) == targetInfo.key }
+            if (fromIndex >= 0 && toIndex >= 0 && fromIndex != toIndex) {
+                draggedOffsetY += (currentInfo.offset - targetInfo.offset).toFloat()
+                rules = rules.move(fromIndex, toIndex)
+            }
+        }
+
+        val edge = with(density) { 56.dp.toPx() }
+        val scrollDelta = when {
+            dragPointerY < layoutInfo.viewportStartOffset + edge -> -18f
+            dragPointerY > layoutInfo.viewportEndOffset - edge -> 18f
+            else -> 0f
+        }
+        if (scrollDelta != 0f && autoScrollJob?.isActive != true) {
+            autoScrollJob = dragScope.launch {
+                val consumed = listState.scrollBy(scrollDelta)
+                draggedOffsetY += consumed
+            }
+        }
+    }
+
+    fun finishRuleDrag(commit: Boolean) {
+        autoScrollJob?.cancel()
+        if (commit && draggedRuleKey != null) {
+            updateRules(rules)
+        } else if (!commit) {
+            dragStartRules?.let { rules = it }
+        }
+        draggedRuleKey = null
+        draggedOffsetY = 0f
+        dragStartRules = null
+    }
+
     LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 20.dp),
@@ -293,8 +371,9 @@ fun DomainRoutingScreen(
         } else {
             itemsIndexed(
                 rules,
-                key = { _, rule -> rule.address.lowercase() }
+                key = { _, rule -> ruleKey(rule) }
             ) { index, rule ->
+                val key = ruleKey(rule)
                 RuleRow(
                     rule = rule,
                     actionLabel = when (rule.action) {
@@ -304,6 +383,12 @@ fun DomainRoutingScreen(
                     },
                     isFirst = index == 0,
                     isLast = index == rules.lastIndex,
+                    isDragging = draggedRuleKey == key,
+                    dragOffsetY = if (draggedRuleKey == key) draggedOffsetY else 0f,
+                    onDragStart = { pointerY -> startRuleDrag(key, pointerY) },
+                    onDrag = { amountY -> dragRuleBy(key, amountY) },
+                    onDragEnd = { finishRuleDrag(commit = true) },
+                    onDragCancel = { finishRuleDrag(commit = false) },
                     onEdit = { editingRule = rule },
                     onDelete = {
                         updateRules(rules.filterIndexed { ruleIndex, _ -> ruleIndex != index })
@@ -461,9 +546,21 @@ private fun RuleRow(
     actionLabel: String,
     isFirst: Boolean,
     isLast: Boolean,
+    isDragging: Boolean,
+    dragOffsetY: Float,
+    onDragStart: (Float) -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
+    // Saving replaces the parent's rules state. A long-lived pointer handler must
+    // use the new callbacks on subsequent gestures, not the pre-save list.
+    val currentOnDragStart by rememberUpdatedState(onDragStart)
+    val currentOnDrag by rememberUpdatedState(onDrag)
+    val currentOnDragEnd by rememberUpdatedState(onDragEnd)
+    val currentOnDragCancel by rememberUpdatedState(onDragCancel)
     val accent = when (rule.action) {
         "block" -> MaterialTheme.colorScheme.error
         "proxy" -> MaterialTheme.colorScheme.tertiary
@@ -477,9 +574,25 @@ private fun RuleRow(
     }
     Row(
         modifier = Modifier
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                translationY = dragOffsetY
+                shadowElevation = if (isDragging) 12.dp.toPx() else 0f
+            }
             .fillMaxWidth()
             .clip(shape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .pointerInput(rule.address) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { currentOnDragStart(it.y) },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        currentOnDrag(amount.y)
+                    },
+                    onDragEnd = { currentOnDragEnd() },
+                    onDragCancel = { currentOnDragCancel() }
+                )
+            }
             .clickable(onClick = onEdit)
             .padding(start = 14.dp, top = 10.dp, bottom = 10.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -514,6 +627,12 @@ private fun RuleRow(
                 fontWeight = FontWeight.SemiBold
             )
         }
+        Icon(
+            Icons.Filled.DragHandle,
+            contentDescription = "${LocalStrings.current.moveRuleUp} / ${LocalStrings.current.moveRuleDown}",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp)
+        )
         IconButton(onClick = onEdit, modifier = Modifier.size(38.dp)) {
             Icon(
                 Icons.Filled.Edit,
@@ -530,5 +649,12 @@ private fun RuleRow(
                 modifier = Modifier.size(18.dp)
             )
         }
+    }
+}
+
+internal fun <T> List<T>.move(from: Int, to: Int): List<T> {
+    if (from !in indices || to !in indices || from == to) return this
+    return toMutableList().apply {
+        add(to, removeAt(from))
     }
 }

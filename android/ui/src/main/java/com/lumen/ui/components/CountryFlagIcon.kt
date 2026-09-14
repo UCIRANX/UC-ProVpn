@@ -91,6 +91,12 @@ fun CountryFlagIcon(
                 StripeStyle.Macedonia -> drawMacedonia(c)
                 StripeStyle.Czech -> drawCzech(c)
                 StripeStyle.EuropeanUnion -> drawEuropeanUnion(c)
+                StripeStyle.SaudiArabia -> drawSaudiArabia(c)
+                StripeStyle.UnitedArabEmirates -> drawUnitedArabEmirates(c)
+                StripeStyle.Bahrain -> drawSerratedGulfFlag(c, teeth = 5, whiteWidth = 0.32f)
+                StripeStyle.Qatar -> drawSerratedGulfFlag(c, teeth = 9, whiteWidth = 0.36f)
+                StripeStyle.Kuwait -> drawKuwait(c)
+                StripeStyle.Oman -> drawOman(c)
             }
             // Subtle top highlight keeps the tiny flags from looking flat.
             drawRect(color = Color(0x14FFFFFF), size = Size(w, h * 0.5f))
@@ -458,6 +464,104 @@ private fun DrawScope.drawMacedonia(colors: List<Color>) {
     ends.forEach { drawLine(yellow, center, it, strokeWidth = size.height * 0.10f) }
     drawCircle(red, size.height * 0.18f, center)
     drawCircle(yellow, size.height * 0.13f, center)
+}
+
+private fun DrawScope.drawSaudiArabia(colors: List<Color>) {
+    val green = colors.getOrElse(0) { Color(0xFF006C35) }
+    val white = colors.getOrElse(1) { Color.White }
+    drawRect(green)
+
+    // Tiny flags cannot preserve calligraphy, but these broken strokes retain the
+    // characteristic white inscription without turning the flag into a tricolour.
+    val stroke = (size.height * 0.055f).coerceAtLeast(0.7f)
+    val left = size.width * 0.24f
+    val right = size.width * 0.77f
+    val upper = size.height * 0.37f
+    drawLine(white, Offset(left, upper), Offset(right, upper), strokeWidth = stroke)
+    drawLine(white, Offset(left * 1.05f, upper + stroke * 1.8f), Offset(size.width * 0.68f, upper + stroke * 1.8f), strokeWidth = stroke)
+    listOf(0.31f, 0.43f, 0.55f, 0.67f).forEach { x ->
+        drawLine(
+            white,
+            Offset(size.width * x, size.height * 0.30f),
+            Offset(size.width * (x - 0.025f), size.height * 0.51f),
+            strokeWidth = stroke
+        )
+    }
+    val swordY = size.height * 0.70f
+    drawLine(white, Offset(size.width * 0.25f, swordY), Offset(size.width * 0.76f, swordY), strokeWidth = stroke)
+    drawLine(white, Offset(size.width * 0.24f, swordY), Offset(size.width * 0.20f, swordY - stroke), strokeWidth = stroke)
+}
+
+private fun DrawScope.drawUnitedArabEmirates(colors: List<Color>) {
+    val green = colors.getOrElse(0) { Color(0xFF00732F) }
+    val white = colors.getOrElse(1) { Color.White }
+    val black = colors.getOrElse(2) { Color.Black }
+    val red = colors.getOrElse(3) { Color(0xFFFF0000) }
+    val hoist = size.width * 0.26f
+    val bandHeight = size.height / 3f
+    drawRect(green)
+    drawRect(white, Offset(0f, bandHeight), Size(size.width, bandHeight + 0.3f))
+    drawRect(black, Offset(0f, bandHeight * 2f), Size(size.width, bandHeight + 0.3f))
+    drawRect(red, size = Size(hoist, size.height))
+}
+
+private fun DrawScope.drawSerratedGulfFlag(colors: List<Color>, teeth: Int, whiteWidth: Float) {
+    val field = colors.getOrElse(0) { Color(0xFFCE1126) }
+    val white = colors.getOrElse(1) { Color.White }
+    drawRect(field)
+    val innerX = size.width * (whiteWidth - 0.09f)
+    val tipX = size.width * whiteWidth
+    val segments = teeth * 2
+    val path = Path().apply {
+        moveTo(0f, 0f)
+        lineTo(innerX, 0f)
+        for (segment in 1..segments) {
+            val x = if (segment % 2 == 1) tipX else innerX
+            lineTo(x, size.height * segment / segments)
+        }
+        lineTo(0f, size.height)
+        close()
+    }
+    drawPath(path, white)
+}
+
+private fun DrawScope.drawKuwait(colors: List<Color>) {
+    val green = colors.getOrElse(0) { Color(0xFF007A3D) }
+    val white = colors.getOrElse(1) { Color.White }
+    val red = colors.getOrElse(2) { Color(0xFFCE1126) }
+    val black = colors.getOrElse(3) { Color.Black }
+    val bandHeight = size.height / 3f
+    drawRect(green)
+    drawRect(white, Offset(0f, bandHeight), Size(size.width, bandHeight + 0.3f))
+    drawRect(red, Offset(0f, bandHeight * 2f), Size(size.width, bandHeight + 0.3f))
+    val hoist = Path().apply {
+        moveTo(0f, 0f)
+        lineTo(size.width * 0.24f, bandHeight)
+        lineTo(size.width * 0.24f, bandHeight * 2f)
+        lineTo(0f, size.height)
+        close()
+    }
+    drawPath(hoist, black)
+}
+
+private fun DrawScope.drawOman(colors: List<Color>) {
+    val white = colors.getOrElse(0) { Color.White }
+    val red = colors.getOrElse(1) { Color(0xFFDB161B) }
+    val green = colors.getOrElse(2) { Color(0xFF008000) }
+    val hoist = size.width * 0.27f
+    val bandHeight = size.height / 3f
+    drawRect(white)
+    drawRect(red, Offset(0f, bandHeight), Size(size.width, bandHeight + 0.3f))
+    drawRect(green, Offset(0f, bandHeight * 2f), Size(size.width, bandHeight + 0.3f))
+    drawRect(red, size = Size(hoist, size.height))
+
+    // Simplified khanjar emblem in the red canton.
+    val emblemX = hoist * 0.50f
+    val emblemY = size.height * 0.19f
+    val stroke = (size.height * 0.035f).coerceAtLeast(0.55f)
+    drawLine(white, Offset(emblemX - hoist * 0.18f, emblemY), Offset(emblemX + hoist * 0.18f, emblemY + size.height * 0.12f), strokeWidth = stroke)
+    drawLine(white, Offset(emblemX + hoist * 0.18f, emblemY), Offset(emblemX - hoist * 0.18f, emblemY + size.height * 0.12f), strokeWidth = stroke)
+    drawLine(white, Offset(emblemX, emblemY - size.height * 0.03f), Offset(emblemX, emblemY + size.height * 0.14f), strokeWidth = stroke)
 }
 
 private fun DrawScope.drawEuropeanUnion(colors: List<Color>) {

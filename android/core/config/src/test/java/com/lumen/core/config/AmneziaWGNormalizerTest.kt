@@ -64,6 +64,37 @@ class AmneziaWGNormalizerTest {
     }
 
     @Test
+    fun testAwg3FieldsAreCanonicalizedAndPreserved() {
+        val normalized = AmneziaWGNormalizer.normalize(
+            mapOf(
+                "type" to "awg",
+                "HeaderProtectionKey" to "header-key=",
+                "content-padding-addition" to "16-96",
+                "rekeyAfterTime" to "120-180",
+                "amnezia" to mapOf(
+                    "RekeyTimeout" to "4-8",
+                    "reject_after_time" to "240-300",
+                    "KeepaliveTimeout" to 30,
+                    "max-handshake-attempts" to "8-12",
+                    "unknown-awg-option" to "must-not-reach-core"
+                )
+            )
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val amnezia = normalized["amnezia"] as Map<String, Any?>
+        assertEquals("header-key=", amnezia["header_protection_key"])
+        assertEquals("16-96", amnezia["content_padding_addition"])
+        assertEquals("120-180", amnezia["rekey_after_time"])
+        assertEquals("4-8", amnezia["rekey_timeout"])
+        assertEquals("240-300", amnezia["reject_after_time"])
+        assertEquals(30, amnezia["keepalive_timeout"])
+        assertEquals("8-12", amnezia["max_handshake_attempts"])
+        assertFalse(amnezia.containsKey("unknown-awg-option"))
+        assertFalse(normalized.containsKey("HeaderProtectionKey"))
+    }
+
+    @Test
     fun testNormalizeIpPrefix() {
         assertEquals("192.168.1.1/32", AmneziaWGNormalizer.normalizeIpPrefix("192.168.1.1"))
         assertEquals("10.0.0.0/24", AmneziaWGNormalizer.normalizeIpPrefix("10.0.0.0/24"))

@@ -48,12 +48,13 @@ class GeoRegionSwitchTest {
         assertEquals(
             listOf(
                 "block:geosite:youtube",
+                "direct:10.0.0.0/8",
                 "direct:geosite:cn",
                 "direct:geoip:cn"
             ),
             switched.directDomains.lines()
         )
-        assertEquals("direct:10.0.0.0/8", switched.directIpCidrs)
+        assertEquals("", switched.directIpCidrs)
     }
 
     @Test

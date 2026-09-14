@@ -1,6 +1,7 @@
 # Isolated sing-box test listener; never creates TUN or a system proxy.
 from copy import deepcopy
 from .engines.singbox.config_builder import build_singbox_outbound
+from .engines.singbox.runtime_planner import _normalize_openvpn_outbounds
 from .probe_capabilities import GROUP_TYPES, NON_PROXY_TYPES, node_protocol
 
 
@@ -21,12 +22,15 @@ def build_native_test_config(node, port: int) -> dict:
     else:
         outbound = build_singbox_outbound(node, tag="speed-proxy")
         final = "speed-proxy"
-        endpoint = outbound.get("type") in {"wireguard", "warp"}
+        endpoint = outbound.get("type") in {"wireguard", "warp", "openvpn-client"}
         config = {"outbounds": [] if endpoint else [outbound]}
         if endpoint:
             config["endpoints"] = [outbound]
         config["dns"] = {"servers": [{"type": "local", "tag": "test-dns"}], "final": "test-dns"}
         config["route"] = {"default_domain_resolver": "test-dns"}
+    # Full imported documents need the same OpenVPN endpoint migration as normal
+    # connections; otherwise only their ping/speed checks retain obsolete outbounds.
+    _normalize_openvpn_outbounds(config)
     # No provider listeners, shared cache, services or OS interfaces in tests.
     config["inbounds"] = [{"type": "mixed", "tag": "speed-http", "listen": "127.0.0.1", "listen_port": int(port)}]
     config["log"] = {"disabled": True}
@@ -34,9 +38,6 @@ def build_native_test_config(node, port: int) -> dict:
     config.pop("services", None)
     for item in config.get("endpoints", []):
         if isinstance(item, dict):
-            item["system"] = False
-    for item in config.get("outbounds", []):
-        if isinstance(item, dict) and item.get("type") == "openvpn":
             item["system"] = False
     route = config.setdefault("route", {})
     route["rules"] = [{"inbound": ["speed-http"], "action": "route", "outbound": final}]

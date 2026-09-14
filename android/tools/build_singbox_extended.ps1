@@ -2,7 +2,7 @@
 param(
     [string]$Ref = "v1.14.0-extended-2.7.1",
     [string]$Repository = "https://github.com/shtorm-7/sing-box-extended.git",
-    [string]$LumenRevision = "1",
+    [string]$LumenRevision = "2",
     [string]$GoExecutable = "go",
     [string]$WorkDirectory = ""
 )
@@ -37,7 +37,7 @@ try {
     # tagged source tree.
     $tags = @(
         "with_gvisor", "with_quic", "with_dhcp", "with_wireguard", "with_utls",
-        "with_acme", "with_clash_api", "with_tailscale", "with_masque",
+        "with_acme", "with_clash_api", "with_tailscale", "with_masque", "with_openvpn",
         "with_mtproxy", "with_trusttunnel", "with_call", "with_sudoku",
         "with_manager", "with_profiler", "badlinkname", "tfogo_checklinkname0"
     ) -join ","

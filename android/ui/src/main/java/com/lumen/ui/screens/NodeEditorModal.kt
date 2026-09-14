@@ -573,6 +573,20 @@ private fun WireGuardFields(
                 modifier = Modifier.weight(1f).padding(vertical = 4.dp)
             )
         }
+        SectionHeader("AWG 3.x")
+        Field("HeaderProtectionKey", draft.headerProtectionKey) {
+            onChange(draft.copy(headerProtectionKey = it))
+        }
+        Field("ContentPaddingAddition", draft.contentPaddingAddition) {
+            onChange(draft.copy(contentPaddingAddition = it))
+        }
+        Field("RekeyAfterTime", draft.rekeyAfterTime) { onChange(draft.copy(rekeyAfterTime = it)) }
+        Field("RekeyTimeout", draft.rekeyTimeout) { onChange(draft.copy(rekeyTimeout = it)) }
+        Field("RejectAfterTime", draft.rejectAfterTime) { onChange(draft.copy(rejectAfterTime = it)) }
+        Field("KeepaliveTimeout", draft.keepaliveTimeout) { onChange(draft.copy(keepaliveTimeout = it)) }
+        Field("MaxHandshakeAttempts", draft.maxHandshakeAttempts) {
+            onChange(draft.copy(maxHandshakeAttempts = it))
+        }
     }
 }
 
@@ -745,7 +759,10 @@ private fun plainWireGuard(d: NodeDraft): NodeDraft = d.copy(
     s1 = "", s2 = "", s3 = "", s4 = "",
     h1 = "", h2 = "", h3 = "", h4 = "",
     i1 = "", i2 = "", i3 = "", i4 = "", i5 = "",
-    j1 = "", j2 = "", j3 = "", itime = ""
+    j1 = "", j2 = "", j3 = "", itime = "",
+    headerProtectionKey = "", contentPaddingAddition = "",
+    rekeyAfterTime = "", rekeyTimeout = "", rejectAfterTime = "",
+    keepaliveTimeout = "", maxHandshakeAttempts = ""
 )
 
 /** Amnezia defaults (Jc/Jmin/Jmax + S1/S2), same values as desktop Lumen and wgtunnel. */

@@ -396,7 +396,7 @@ def _runtime_summary_lines(config: dict[str, Any]) -> list[str]:
             peers = proxy.get("peers") if isinstance(proxy.get("peers"), list) else []
             first_peer = next((peer for peer in peers if isinstance(peer, dict)), {})
             server = str(first_peer.get("address") or "")
-        if not server and str(proxy.get("type") or "") == "openvpn":
+        if not server and str(proxy.get("type") or "") in {"openvpn", "openvpn-client"}:
             servers = proxy.get("servers") if isinstance(proxy.get("servers"), list) else []
             first_server = next((item for item in servers if isinstance(item, dict)), {})
             server = str(first_server.get("server") or "")

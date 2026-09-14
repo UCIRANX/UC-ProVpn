@@ -15,7 +15,7 @@ _PROXY_TYPES = frozenset({
     "socks", "socks5", "http", "https", "shadowsocks", "shadowsocksr",
     "ss", "ssr", "vmess", "vless", "trojan", "hysteria", "hysteria2",
     "hy2", "tuic", "wireguard", "amneziawg", "awg", "ssh", "tor",
-    "naive", "naiveproxy", "anytls", "shadowtls", "masque", "openvpn",
+    "naive", "naiveproxy", "anytls", "shadowtls", "masque", "openvpn", "openvpnclient",
 })
 _GROUP_TYPES = frozenset({
     "selector", "select", "urltest", "fallback", "loadbalance", "relay",

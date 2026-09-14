@@ -58,7 +58,9 @@ fun RoutingScreen(
     var hideSystem by remember { mutableStateOf(true) }
     val filteredApps = remember(apps, query, hideSystem) {
         apps.asSequence()
-            .filter { !hideSystem || !it.isSystem }
+            // A selected system app must stay visible even while the general system-app
+            // filter is enabled; otherwise it cannot be reviewed or deselected.
+            .filter { !hideSystem || !it.isSystem || it.isSelected }
             .filter {
                 query.isBlank() || it.label.contains(query, true) ||
                     it.packageName.contains(query, true)

@@ -10,6 +10,15 @@ import org.junit.Test
 import java.util.Base64
 
 class LinkParserTest {
+    @Test
+    fun openVpnAcceptsDisabledMssFixAndImplicitExitNotifyCount() {
+        val node = LinkParser.parseOpenVpnConfig(
+            "client\nremote vpn.example 1194\nproto udp\nmssfix 0\nexplicit-exit-notify\n<ca>\nCA\n</ca>\n"
+        )
+        val native = node.outbound["singbox"] as Map<*, *>
+        assertEquals(true, native["mss_fix_disabled"])
+        assertEquals(1, native["explicit_exit_notify"])
+    }
 
     @Test
     fun testNumberedLocationServersRemainIndependentNodes() {
@@ -588,7 +597,7 @@ class LinkParserTest {
     }
 
     @Test
-    fun openVpnProfileWithBothTransportsKeepsOnlyTheTcpRemotes() {
+    fun openVpnProfileWithBothTransportsKeepsEveryRemote() {
         val node = LinkParser.parseOpenVpnConfig(
             """
             client
@@ -604,16 +613,16 @@ class LinkParserTest {
             """.trimIndent()
         )
         val singbox = node.outbound["singbox"] as Map<*, *>
-        assertEquals("tcp", singbox["proto"])
+        assertEquals("udp", singbox["proto"])
         val servers = singbox["servers"] as List<*>
-        assertEquals(1, servers.size)
-        assertEquals("ovpn-tcp.example.com", (servers[0] as Map<*, *>)["server"])
+        assertEquals(2, servers.size)
+        assertEquals("udp", (servers[0] as Map<*, *>)["network"])
+        assertEquals("tcp", (servers[1] as Map<*, *>)["network"])
     }
 
     @Test
-    fun udpOnlyOpenVpnProfileIsRejectedWithAnActionableMessage() {
-        val error = runCatching {
-            LinkParser.parseOpenVpnConfig(
+    fun udpOnlyOpenVpnProfileIsImported() {
+        val node = LinkParser.parseOpenVpnConfig(
                 """
                 client
                 dev tun
@@ -626,8 +635,35 @@ class LinkParserTest {
                 </ca>
                 """.trimIndent()
             )
-        }.exceptionOrNull()
-        assertTrue(error?.message.orEmpty().contains("OpenVPN over UDP is not supported"))
+        val singbox = node.outbound["singbox"] as Map<*, *>
+        assertEquals("udp", singbox["proto"])
+    }
+
+    @Test
+    fun openVpnConnectionBlocksKeepMixedRemoteTransports() {
+        val node = LinkParser.parseOpenVpnConfig(
+            """
+            client
+            remote-random
+            <connection>
+            remote tcp.example.com 443
+            proto tcp-client
+            </connection>
+            <connection>
+            remote udp.example.com 1194
+            proto udp
+            </connection>
+            <ca>
+            -----BEGIN CERTIFICATE-----
+            MIIB
+            -----END CERTIFICATE-----
+            </ca>
+            """.trimIndent()
+        )
+        val singbox = node.outbound["singbox"] as Map<*, *>
+        assertEquals(true, singbox["remote_random"])
+        val servers = singbox["servers"] as List<*>
+        assertEquals(listOf("tcp", "udp"), servers.map { (it as Map<*, *>)["network"] })
     }
 
     private fun openVpnWith(vararg directives: String): String = buildString {
@@ -1399,6 +1435,56 @@ class LinkParserTest {
         assertEquals(12, amnezia["s3"])
         assertEquals("431245120-431245220", amnezia["h1"])
         assertEquals("<b 0x7d1eb544><rd 9><t><r 124>", amnezia["i1"])
+    }
+
+    @Test
+    fun awg3ConfigKeepsHeaderProtectionAndLifecycleRanges() {
+        val config = """
+            # Name = AWG 3.0
+            [Interface]
+            PrivateKey = private=
+            Address = 10.9.9.2/32
+            Jc = 4
+            S1 = 146
+            H1 = 148736594-370455131
+            HeaderProtectionKey = qOZ8vN2mK4pL7wR1tY6uI3oP5aS9dF0gH8jK2lM4nB0=
+            ContentPaddingAddition = 16-96
+            RekeyAfterTime = 120-180
+            RekeyTimeout = 4-8
+            RejectAfterTime = 240-300
+            KeepaliveTimeout = 25-35
+            MaxHandshakeAttempts = 8-12
+
+            [Peer]
+            PublicKey = public=
+            AllowedIPs = 0.0.0.0/0
+            Endpoint = example.com:443
+        """.trimIndent()
+
+        val node = LinkParser.parseWireGuardConfig(config)
+        assertEquals("awg", node.scheme)
+        val amnezia = (node.outbound["singbox"] as Map<*, *>)["amnezia"] as Map<*, *>
+        assertEquals("qOZ8vN2mK4pL7wR1tY6uI3oP5aS9dF0gH8jK2lM4nB0=", amnezia["header_protection_key"])
+        assertEquals("16-96", amnezia["content_padding_addition"])
+        assertEquals("120-180", amnezia["rekey_after_time"])
+        assertEquals("4-8", amnezia["rekey_timeout"])
+        assertEquals("240-300", amnezia["reject_after_time"])
+        assertEquals("25-35", amnezia["keepalive_timeout"])
+        assertEquals("8-12", amnezia["max_handshake_attempts"])
+    }
+
+    @Test
+    fun awg3LinkAcceptsCompactAndDashedParameterNames() {
+        val link = "awg://private%3D@example.com:443?publickey=public%3D&ip=10.9.9.2%2F32" +
+            "&HeaderProtectionKey=header%2Bkey%3D&content-padding-addition=16-96" +
+            "&rekeyAfterTime=120-180&max_handshake_attempts=8-12#AWG%203"
+
+        val node = LinkParser.parseSingle(link)
+        val amnezia = (node.outbound["singbox"] as Map<*, *>)["amnezia"] as Map<*, *>
+        assertEquals("header+key=", amnezia["header_protection_key"])
+        assertEquals("16-96", amnezia["content_padding_addition"])
+        assertEquals("120-180", amnezia["rekey_after_time"])
+        assertEquals("8-12", amnezia["max_handshake_attempts"])
     }
 
     @Test

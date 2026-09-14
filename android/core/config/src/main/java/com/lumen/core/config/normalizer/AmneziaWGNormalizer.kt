@@ -13,11 +13,26 @@ object AmneziaWGNormalizer {
     // Must stay in sync with LinkParser's AMNEZIA_* key sets, otherwise parsed
     // AmneziaWG 1.5 parameters are dropped before reaching the core.
     private val AMNEZIA_INT_KEYS = listOf("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "itime")
-    // uint32 in the core schema: values above Int.MAX_VALUE must not be toInt()ed.
-    private val AMNEZIA_RANGE_KEYS = listOf("h1", "h2", "h3", "h4")
-    // AWG 2.0 packet definitions: the core reads these as strings.
-    private val AMNEZIA_STR_KEYS = listOf("i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3")
+    // uint32 ranges in the core schema: values above Int.MAX_VALUE must not be toInt()ed.
+    private val AMNEZIA_RANGE_KEYS = listOf(
+        "h1", "h2", "h3", "h4",
+        "content_padding_addition", "rekey_after_time", "rekey_timeout",
+        "reject_after_time", "keepalive_timeout", "max_handshake_attempts"
+    )
+    // AWG packet definitions and the AWG 3.x header key are strings.
+    private val AMNEZIA_STR_KEYS = listOf(
+        "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3",
+        "header_protection_key"
+    )
     private val AMNEZIA_JUNK_KEYS = AMNEZIA_INT_KEYS + AMNEZIA_RANGE_KEYS + AMNEZIA_STR_KEYS
+
+    private fun canonicalAmneziaKey(rawKey: Any?): String? {
+        val compact = rawKey?.toString()?.trim()?.lowercase()
+            ?.replace("_", "")?.replace("-", "") ?: return null
+        return AMNEZIA_JUNK_KEYS.firstOrNull { candidate ->
+            candidate.replace("_", "") == compact
+        }
+    }
     // The extended core's WireGuardPeer schema. Everything else is rejected while
     // decoding the endpoint (`json: unknown field ...`), and provider profiles do
     // ship extra keys such as `name`, `mtu` or `dns` inside a peer.
@@ -236,11 +251,20 @@ object AmneziaWGNormalizer {
 
         result["peers"] = peersList
 
-        // Preserve AmneziaWG junk parameters inside "amnezia" sub-object for sing-box extended schema
-        val amneziaSubMap = (endpoint["amnezia"] as? Map<*, *>)?.toMutableMap() ?: mutableMapOf()
+        // Preserve only known AmneziaWG parameters and canonicalize .conf/Clash
+        // spellings before the strict extended-core JSON decoder sees them.
+        val amneziaSubMap = mutableMapOf<String, Any?>()
+        (endpoint["amnezia"] as? Map<*, *>)?.forEach { (rawKey, value) ->
+            canonicalAmneziaKey(rawKey)?.let { amneziaSubMap[it] = value }
+        }
+        endpoint.keys.toList().forEach { rawKey ->
+            val canonical = canonicalAmneziaKey(rawKey) ?: return@forEach
+            if (endpoint[rawKey] != null) amneziaSubMap[canonical] = endpoint[rawKey]
+            result.remove(rawKey)
+        }
         for (junkKey in AMNEZIA_JUNK_KEYS) {
             result.remove(junkKey) // Eliminate top-level unknown fields
-            val value = endpoint[junkKey] ?: amneziaSubMap[junkKey]
+            val value = amneziaSubMap[junkKey]
             if (value != null) {
                 when (junkKey) {
                     // A numeric i1/j1 must stay a string, and an h1 above

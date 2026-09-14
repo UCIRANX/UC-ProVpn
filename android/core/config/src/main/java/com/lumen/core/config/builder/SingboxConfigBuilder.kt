@@ -503,8 +503,8 @@ object SingboxConfigBuilder {
             }
         }
 
-        options.directIpCidrs.forEach { processRuleItem(it) }
         options.directDomains.forEach { processRuleItem(it) }
+        options.directIpCidrs.forEach { processRuleItem(it) }
 
         // 5. DNS. Keep the same three-stage contract as desktop Lumen:
         // system -> bootstrap/direct -> proxied resolver. In particular, a
@@ -865,9 +865,8 @@ object SingboxConfigBuilder {
         }
 
         // 6. Route (sing-box 1.13 rule actions). The old implementation repeatedly
-        // inserted at index zero, reversing the user's order and making direct rules
-        // beat explicit rejects. System rules stay first; user rejects are then
-        // fail-closed, while every remaining user rule keeps its original order.
+        // inserted at index zero, reversing the user's order. System rules stay
+        // first and every user rule then keeps its visible order.
         val routeRules = mutableListOf<Map<String, Any?>>()
         val sniffRule = mutableMapOf<String, Any?>("action" to "sniff")
         // An unknown sniffer name aborts the router, so only known ones survive.
@@ -954,6 +953,39 @@ object SingboxConfigBuilder {
             return tag
         }
 
+        val precedingDnsAllows = mutableListOf<Map<String, Any?>>()
+        fun appendDnsRejectRule(matcher: Map<String, Any?>) {
+            val rule = if (precedingDnsAllows.isEmpty()) matcher else mapOf(
+                "type" to "logical", "mode" to "and",
+                "rules" to listOf(
+                    matcher - "action",
+                    mapOf("type" to "logical", "mode" to "or", "invert" to true,
+                        "rules" to precedingDnsAllows.toList())
+                ),
+                "action" to "reject"
+            )
+            if (dnsMode == "json") {
+                val customDns = mapValue(root["dns"])?.toMutableMap() ?: return
+                val customRules = (customDns["rules"] as? List<*>)
+                    ?.mapNotNull(::mapValue)
+                    ?.toMutableList()
+                    ?: mutableListOf()
+                if (rule !in customRules) customRules.add(0, rule)
+                customDns["rules"] = customRules
+                root["dns"] = customDns
+                return
+            }
+
+            if (rule in dnsRules) return
+            // Ad blocking is terminal DNS policy. Put it ahead of direct-resolver
+            // rules and FakeIP, otherwise a broader direct rule can resolve the ad
+            // first and the browser never reaches the reject rule.
+            val insertAt = dnsRules.indices.firstOrNull { index ->
+                dnsRules[index]["server"] in setOf("dns-direct-final", "dns-fake")
+            } ?: dnsRules.size
+            dnsRules.add(insertAt, rule)
+        }
+
         fun appendUserRule(item: UserRouteRule) {
             val rule = mutableMapOf<String, Any?>()
             when (item.kind) {
@@ -967,6 +999,11 @@ object SingboxConfigBuilder {
                         // skipping it keeps the config startable.
                         val tag = ensureRuleSet(item.kind, item.value) ?: return
                         rule["rule_set"] = listOf(tag)
+                        if (item.kind == "geosite" && item.action == "block") {
+                            appendDnsRejectRule(
+                                mapOf("rule_set" to listOf(tag), "action" to "reject")
+                            )
+                        }
                         if (item.kind == "geosite" && item.action == "direct" &&
                             options.dnsGeoCheck && dnsMode != "json"
                         ) {
@@ -982,15 +1019,27 @@ object SingboxConfigBuilder {
                     }
                 }
                 "ip" -> rule["ip_cidr"] = listOf(item.value)
-                else -> rule[item.field] = listOf(item.value)
+                else -> {
+                    rule[item.field] = listOf(item.value)
+                    if (item.action == "block") {
+                        appendDnsRejectRule(
+                            mapOf(item.field to listOf(item.value), "action" to "reject")
+                        )
+                    }
+                }
+            }
+            if (item.action != "block" && item.kind != "ip" && item.kind != "geoip") {
+                precedingDnsAllows += rule.toMap()
             }
             if (item.action == "block") rule["action"] = "reject"
             else rule["outbound"] = item.action
             routeRules += rule
         }
 
-        orderedUserRules.filter { it.action == "block" }.forEach(::appendUserRule)
-        orderedUserRules.filterNot { it.action == "block" }.forEach(::appendUserRule)
+        // User rules use first-match semantics, so their visible order must be their
+        // executable order. Presets place important reject rules first by default,
+        // while the user remains free to create a more specific exception above one.
+        orderedUserRules.forEach(::appendUserRule)
 
         // Explicit user rules above retain priority over the broad LAN shortcut.
         if (options.bypassLan) {
@@ -1059,6 +1108,7 @@ object SingboxConfigBuilder {
 
         // 9. Normalize AmneziaWG and WireGuard outbounds to extended endpoints format
         AmneziaWGNormalizer.normalizeSingboxWireguardEndpoints(root)
+        normalizeOpenVpnEndpoints(root)
         applyBootstrapResolvers(root, pinnedServerHosts.keys)
         applyDialOptions(root, options)
 
@@ -1460,11 +1510,16 @@ object SingboxConfigBuilder {
                 ?.filterIsInstance<Map<*, *>>()
                 ?.mapNotNull { it["address"]?.toString() }
                 ?.firstOrNull(::isDomain)
-            if ((isDomain(server) || peerDomain != null) && result["domain_resolver"] == null) {
+            val remoteDomain = (result["servers"] as? List<*>)
+                ?.asSequence()
+                ?.filterIsInstance<Map<*, *>>()
+                ?.mapNotNull { it["server"]?.toString() }
+                ?.firstOrNull(::isDomain)
+            if ((isDomain(server) || peerDomain != null || remoteDomain != null) && result["domain_resolver"] == null) {
                 // A hostname the app already resolved and vetted is answered from the
                 // static table instead of the network, which is the only way past a
                 // carrier that answers - rather than fails - with a sinkhole address.
-                val host = (server.takeIf(::isDomain) ?: peerDomain.orEmpty())
+                val host = (server.takeIf(::isDomain) ?: peerDomain ?: remoteDomain.orEmpty())
                     .trim().trimEnd('.').lowercase()
                 result["domain_resolver"] =
                     if (host in pinnedHosts) PINNED_SERVER_DNS_TAG else "dns-bootstrap"
@@ -1798,11 +1853,11 @@ object SingboxConfigBuilder {
             if (normalized["type"] == "masque") {
                 sanitizeMasqueOutbound(normalized)
             }
+            requireOpenVpnCredentials(normalized, node)
             normalizeOpenVpnOutbound(normalized)
             normalizeShadowsocksMethod(normalized)
             normalizeShadowsocks2022(normalized)
             applyMultiplexOptions(normalized, options)
-            requireOpenVpnCredentials(normalized, node)
             return normalized
         }
 
@@ -1982,8 +2037,8 @@ object SingboxConfigBuilder {
                     if (nativeMap["lumen_proxy"] == null) {
                         outbound["lumen_proxy"]?.let { nativeMap["lumen_proxy"] = it }
                     }
-                    normalizeOpenVpnOutbound(nativeMap)
                     requireOpenVpnCredentials(nativeMap, node)
+                    normalizeOpenVpnOutbound(nativeMap)
                     return nativeMap
                 }
                 result["type"] = "openvpn"
@@ -2098,14 +2153,18 @@ object SingboxConfigBuilder {
      * Certificate-only profiles ask for no credentials and are left alone.
      */
     private fun requireOpenVpnCredentials(outbound: Map<String, Any?>, node: ParsedNode) {
-        if (outbound["type"]?.toString()?.lowercase() != "openvpn") return
+        if (outbound["type"]?.toString()?.lowercase() !in setOf("openvpn", "openvpn-client")) return
         // An encrypted private key is just as fatal as a missing login: without the
         // passphrase the core cannot even parse the key, so reject the member here.
-        val privateKey = ((outbound["tls"] as? Map<*, *>)?.get("key")?.toString() ?: "").uppercase()
+        val tls = outbound["tls"] as? Map<*, *>
+        val privateKey = (tls?.get("key")?.toString() ?: tls?.get("client_key")?.toString().orEmpty()).uppercase()
         val encryptedKey = privateKey.contains("ENCRYPTED PRIVATE KEY") ||
             (privateKey.contains("PROC-TYPE:") && privateKey.contains("ENCRYPTED"))
-        if (encryptedKey && outbound["key_password"]?.toString()?.trim().isNullOrEmpty()) {
-            throw IllegalArgumentException("OpenVPN private key is encrypted and requires a private key password")
+        if (encryptedKey) {
+            if (outbound["key_password"]?.toString()?.trim().isNullOrEmpty()) {
+                throw IllegalArgumentException("OpenVPN private key is encrypted and requires a private key password")
+            }
+            throw IllegalArgumentException("Encrypted OpenVPN private keys are not supported by the current core")
         }
         if (!LinkParser.openVpnRequiresUserAuth(node.link)) return
         val username = outbound["username"]?.toString()?.trim().orEmpty()
@@ -2121,31 +2180,54 @@ object SingboxConfigBuilder {
      * core reject the complete connection or an entire AUTO pool.
      */
     private fun normalizeOpenVpnOutbound(outbound: MutableMap<String, Any?>) {
-        if (outbound["type"]?.toString()?.lowercase() != "openvpn") return
+        val outboundType = outbound["type"]?.toString()?.trim()?.lowercase().orEmpty()
+        if (outboundType !in setOf("openvpn", "openvpn-client")) return
+        val legacy = outboundType == "openvpn"
 
-        val proto = outbound["proto"]?.toString()?.trim()?.lowercase().orEmpty()
-        outbound["proto"] = when (proto) {
-            // Rows saved before the transport column existed. TCP is the only transport
-            // this core can finish a handshake on, so assume it rather than the OpenVPN
-            // spec default of UDP.
-            "" -> "tcp"
-            "tcp", "tcp-client", "tcp4", "tcp4-client", "tcp6", "tcp6-client" -> "tcp"
-            // The control channel pushes the whole certificate chain in a single datagram
-            // that exceeds the path MTU. Desktop OpenVPN splits it with --fragment/--mssfix;
-            // neither string is present in the bundled core, and its `udp_fragment` dial
-            // option only stops the dialer from forcing DF - the kernel default sets it
-            // anyway, so the socket still answers EMSGSIZE and the handshake dies with
-            // `write: message too long`. No lever is left, so refuse loudly instead of
-            // connecting to a tunnel that cannot pass traffic.
-            "udp", "udp4", "udp6" -> throw IllegalArgumentException(
-                "OpenVPN over UDP is not supported by this core; re-import the profile using its TCP remote"
-            )
-            else -> throw IllegalArgumentException("Unsupported OpenVPN transport `$proto`")
+        fun normalizeNetwork(value: Any?): String = when (val network = value?.toString()?.trim()?.lowercase().orEmpty()) {
+            "", "udp" -> "udp"
+            "udp4", "udp6" -> network
+            "tcp", "tcp-client" -> "tcp"
+            "tcp4", "tcp4-client" -> "tcp4"
+            "tcp6", "tcp6-client" -> "tcp6"
+            else -> throw IllegalArgumentException("Unsupported OpenVPN transport `$network`")
         }
 
-        OpenVpnConfigNormalizer.normalizeDataCipher(outbound["cipher"]?.toString())
-            ?.let { outbound["cipher"] = it }
-            ?: outbound.remove("cipher")
+        val network = normalizeNetwork(outbound.remove("proto") ?: outbound["network"] ?: if (legacy) "tcp" else "udp")
+        outbound["type"] = "openvpn-client"
+        outbound["network"] = network
+        outbound["system"] = false
+        outbound["name"] = outbound["name"]?.toString()?.takeIf { it.isNotBlank() } ?: "openvpn0"
+        (outbound["servers"] as? List<*>)?.let { rawServers ->
+            outbound["servers"] = rawServers.mapNotNull { raw ->
+                val server = (raw as? Map<*, *>)?.entries
+                    ?.associate { it.key.toString() to it.value }
+                    ?.toMutableMap() ?: return@mapNotNull null
+                val remoteNetwork = server.remove("proto") ?: server["network"] ?: network
+                server["network"] = normalizeNetwork(remoteNetwork)
+                server
+            }
+        }
+
+        if (legacy) {
+            val rawCipher = outbound.remove("cipher")?.toString()?.trim().orEmpty()
+            if (rawCipher.isNotEmpty()) {
+                val cipher = OpenVpnConfigNormalizer.normalizeDataCipher(rawCipher)
+                    ?: throw IllegalArgumentException("Unsupported OpenVPN data cipher `$rawCipher`")
+                outbound["data_ciphers"] = listOf(cipher)
+                outbound["data_ciphers_fallback"] = cipher
+            }
+        } else if (outbound.containsKey("data_ciphers")) {
+            val rawCiphers = when (val value = outbound["data_ciphers"]) {
+                is List<*> -> value.map { it.toString() }
+                else -> value?.toString()?.split(":").orEmpty()
+            }
+            val ciphers = rawCiphers.mapNotNull(OpenVpnConfigNormalizer::normalizeDataCipher)
+            if (rawCiphers.isNotEmpty() && ciphers.isEmpty()) {
+                throw IllegalArgumentException("Unsupported OpenVPN data cipher")
+            }
+            outbound["data_ciphers"] = ciphers
+        }
         OpenVpnConfigNormalizer.normalizeAuthDigest(outbound["auth"]?.toString())
             ?.let { outbound["auth"] = it }
             ?: outbound.remove("auth")
@@ -2154,22 +2236,98 @@ object SingboxConfigBuilder {
             ?.associate { it.key.toString() to it.value }
             ?.toMutableMap()
         if (tls != null) {
-            val suites = OpenVpnConfigNormalizer.normalizeTlsCipherSuites(tls["cipher_suites"])
-            if (suites.isEmpty()) tls.remove("cipher_suites") else tls["cipher_suites"] = suites
-            val verifyMode = tls["verify_x509_name_mode"]?.toString()?.trim()?.lowercase()
-            if (verifyMode == "subject") {
-                throw IllegalArgumentException(
-                    "OpenVPN verify-x509-name mode `subject` is not supported by the bundled core"
-                )
+            if (legacy) {
+                val ca = tls.remove("ca")
+                val caPath = tls.remove("ca_path")
+                val clientCertificate = tls.remove("certificate")
+                val clientCertificatePath = tls.remove("certificate_path")
+                val clientKey = tls.remove("key")
+                val clientKeyPath = tls.remove("key_path")
+                if (ca != null) tls["certificate"] = ca
+                if (caPath != null) tls["certificate_path"] = caPath
+                if (clientCertificate != null) tls["client_certificate"] = clientCertificate
+                if (clientCertificatePath != null) tls["client_certificate_path"] = clientCertificatePath
+                if (clientKey != null) tls["client_key"] = clientKey
+                if (clientKeyPath != null) tls["client_key_path"] = clientKeyPath
+                tls.remove("verify_x509_name")?.let { tls["server_name"] = it }
+                var verifyMode = tls.remove("verify_x509_name_mode")?.toString()?.trim()?.lowercase().orEmpty()
+                if (verifyMode == "exact") verifyMode = "name"
+                if (verifyMode.isNotEmpty()) {
+                    if (verifyMode !in setOf("subject", "name", "name-prefix")) {
+                        throw IllegalArgumentException("OpenVPN verify-x509-name mode `$verifyMode` is not supported")
+                    }
+                    tls["server_name_type"] = verifyMode
+                }
+                val rawSuites = tls.remove("cipher_suites")
+                val suites = OpenVpnConfigNormalizer.normalizeTlsCipherSuites(rawSuites)
+                if (suites.isNotEmpty()) tls["cipher"] = suites.joinToString(":")
+                else if (when (rawSuites) {
+                    null -> false
+                    is Collection<*> -> rawSuites.isNotEmpty()
+                    else -> rawSuites.toString().isNotBlank()
+                }) {
+                    throw IllegalArgumentException("Unsupported OpenVPN TLS cipher suite")
+                }
+
+                val tlsAuth = outbound.remove("tls_auth")?.toString()?.takeIf { it.isNotBlank() }
+                val tlsAuthPath = outbound.remove("tls_auth_path")?.toString()?.takeIf { it.isNotBlank() }
+                val tlsCrypt = outbound.remove("tls_crypt")?.toString()?.takeIf { it.isNotBlank() }
+                val tlsCryptPath = outbound.remove("tls_crypt_path")?.toString()?.takeIf { it.isNotBlank() }
+                val controlType = when {
+                    tlsAuth != null || tlsAuthPath != null -> "tls_auth"
+                    (tlsCrypt != null || tlsCryptPath != null) && outbound.remove("tls_crypt_v2") == true -> "tls_crypt_v2"
+                    tlsCrypt != null || tlsCryptPath != null -> "tls_crypt"
+                    else -> ""
+                }
+                val controlKey = tlsAuth ?: tlsCrypt
+                val controlPath = tlsAuthPath ?: tlsCryptPath
+                if (controlType.isNotEmpty() && (controlKey != null || controlPath != null)) {
+                    val controlWrap = mutableMapOf<String, Any?>("type" to controlType)
+                    if (controlKey != null) controlWrap["key"] = controlKey else controlWrap["key_path"] = controlPath
+                    val direction = outbound.remove("key_direction")?.toString()
+                    if (controlType == "tls_auth" && direction in setOf("0", "1")) {
+                        controlWrap["direction"] = if (direction == "0") "server" else "client"
+                    }
+                    tls["control_wrap"] = controlWrap
+                }
             }
-            if (verifyMode != null && verifyMode !in setOf("", "name", "name-prefix", "name-suffix")) {
-                throw IllegalArgumentException("Invalid OpenVPN verify-x509-name mode `$verifyMode`")
-            }
+            tls.remove("kernel_tx")
+            tls.remove("kernel_rx")
             outbound["tls"] = tls
         }
+        for (key in listOf(
+            "tls_auth", "tls_auth_path", "tls_crypt", "tls_crypt_path", "tls_crypt_v2",
+            "key_direction", "key_password", "reconnect_delay", "allowed_ips", "lumen_requires_user_auth"
+        )) {
+            outbound.remove(key)
+        }
+    }
 
-        if (!outbound["tls_auth"]?.toString().isNullOrBlank() && !outbound.containsKey("key_direction")) {
-            outbound["key_direction"] = -1
+    /** Move migrated OpenVPN clients out of `outbounds`, where sing-box 1.14 rejects them. */
+    private fun normalizeOpenVpnEndpoints(root: MutableMap<String, Any?>) {
+        val outbounds = (root["outbounds"] as? List<*>)?.toMutableList() ?: mutableListOf()
+        val endpoints = (root["endpoints"] as? List<*>)?.toMutableList() ?: mutableListOf()
+        val retainedOutbounds = mutableListOf<Any?>()
+        for (item in outbounds) {
+            val mutable = (item as? Map<*, *>)?.entries
+                ?.associate { it.key.toString() to it.value }
+                ?.toMutableMap()
+            if (mutable == null || mutable["type"]?.toString()?.trim()?.lowercase() !in setOf("openvpn", "openvpn-client")) {
+                retainedOutbounds += item
+                continue
+            }
+            normalizeOpenVpnOutbound(mutable)
+            endpoints += mutable
+        }
+        root["outbounds"] = retainedOutbounds
+        root["endpoints"] = endpoints.map { item ->
+            val mutable = (item as? Map<*, *>)?.entries
+                ?.associate { it.key.toString() to it.value }
+                ?.toMutableMap()
+            if (mutable != null && mutable["type"]?.toString()?.trim()?.lowercase() in setOf("openvpn", "openvpn-client")) {
+                normalizeOpenVpnOutbound(mutable)
+                mutable
+            } else item
         }
     }
 

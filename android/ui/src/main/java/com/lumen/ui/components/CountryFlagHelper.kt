@@ -26,7 +26,13 @@ enum class StripeStyle {
     Malaysia,
     Macedonia,
     Czech,
-    EuropeanUnion
+    EuropeanUnion,
+    SaudiArabia,
+    UnitedArabEmirates,
+    Bahrain,
+    Qatar,
+    Kuwait,
+    Oman
 }
 
 data class FlagStripeData(
@@ -117,14 +123,16 @@ object CountryFlagHelper {
         "KZ" to FlagStripeData(StripeStyle.Kazakhstan, listOf(Color(0xFF00AFCA), Color(0xFFFFD700))),
         "UZ" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF1EB53A), Color(0xFFFFFFFF), Color(0xFF0099B5))),
         "VN" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFDA251D), Color(0xFFFFCD00), Color(0xFFDA251D))),
-        "SA" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF006C35), Color(0xFFFFFFFF), Color(0xFF006C35))),
-        "AE" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF00732F), Color(0xFFFFFFFF), Color(0xFF000000))),
-        "QA" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF8A1538), Color(0xFFFFFFFF), Color(0xFF8A1538))),
+        "SA" to FlagStripeData(StripeStyle.SaudiArabia, listOf(Color(0xFF006C35), Color(0xFFFFFFFF))),
+        "AE" to FlagStripeData(StripeStyle.UnitedArabEmirates, listOf(Color(0xFF00732F), Color(0xFFFFFFFF), Color(0xFF000000), Color(0xFFFF0000))),
+        "BH" to FlagStripeData(StripeStyle.Bahrain, listOf(Color(0xFFCE1126), Color(0xFFFFFFFF))),
+        "QA" to FlagStripeData(StripeStyle.Qatar, listOf(Color(0xFF8A1538), Color(0xFFFFFFFF))),
+        "KW" to FlagStripeData(StripeStyle.Kuwait, listOf(Color(0xFF007A3D), Color(0xFFFFFFFF), Color(0xFFCE1126), Color(0xFF000000))),
+        "OM" to FlagStripeData(StripeStyle.Oman, listOf(Color(0xFFFFFFFF), Color(0xFFDB161B), Color(0xFF008000))),
         "MY" to FlagStripeData(StripeStyle.Malaysia, listOf(Color(0xFF010066), Color(0xFFCC0001), Color(0xFFFFFFFF), Color(0xFFFFCC00))),
         "TH" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFA51931), Color(0xFFF4F5F8), Color(0xFF2D2A4A))),
         "PH" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF0038A8), Color(0xFFFFFFFF), Color(0xFFCE1126))),
         "MM" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFFECB00), Color(0xFF34B233), Color(0xFFEA2839))),
-        "BD" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF006A4E), Color(0xFFF42A41), Color(0xFF006A4E))),
         "PK" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF01411C), Color(0xFFFFFFFF), Color(0xFF01411C))),
         "CL" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFFFFFFF), Color(0xFF0039A6), Color(0xFFD52B1E))),
         "PA" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFFFFFFF), Color(0xFFDA121A), Color(0xFF003DA5))),
@@ -138,7 +146,6 @@ object CountryFlagHelper {
         "EU" to FlagStripeData(StripeStyle.EuropeanUnion, listOf(Color(0xFF003399), Color(0xFFFFCC00))),
         "ME" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFC40308), Color(0xFFD4AF37), Color(0xFFC40308))),
         "MA" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFC1272D), Color(0xFF006233), Color(0xFFC1272D))),
-        "TN" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFFE70013), Color(0xFFFFFFFF), Color(0xFFE70013))),
         "DZ" to FlagStripeData(StripeStyle.Horizontal, listOf(Color(0xFF006233), Color(0xFFFFFFFF), Color(0xFFD21034)))
     )
 
@@ -171,8 +178,9 @@ object CountryFlagHelper {
         "chile" to "CL", "colombia" to "CO", "mexico" to "MX",
         "canada" to "CA", "australia" to "AU", "new zealand" to "NZ",
         "south africa" to "ZA", "nigeria" to "NG", "kenya" to "KE",
-        "egypt" to "EG", "uae" to "AE", "emirates" to "AE",
-        "saudi arabia" to "SA", "panama" to "PA", "iran" to "IR",
+        "egypt" to "EG", "uae" to "AE", "united arab emirates" to "AE", "emirates" to "AE",
+        "saudi arabia" to "SA", "bahrain" to "BH", "qatar" to "QA",
+        "kuwait" to "KW", "oman" to "OM", "panama" to "PA", "iran" to "IR",
         "iraq" to "IQ", "pakistan" to "PK", "bangladesh" to "BD",
         "cambodia" to "KH", "myanmar" to "MM", "mongolia" to "MN",
         // Russian country names
@@ -201,7 +209,8 @@ object CountryFlagHelper {
         "мексика" to "MX", "канада" to "CA", "австралия" to "AU",
         "новая зеландия" to "NZ", "юар" to "ZA", "нигерия" to "NG",
         "кения" to "KE", "египет" to "EG", "оаэ" to "AE", "эмираты" to "AE",
-        "саудовская аравия" to "SA", "панама" to "PA", "иран" to "IR",
+        "саудовская аравия" to "SA", "бахрейн" to "BH", "катар" to "QA",
+        "кувейт" to "KW", "оман" to "OM", "панама" to "PA", "иран" to "IR",
         "ирак" to "IQ", "пакистан" to "PK", "монголия" to "MN",
         // Major cities
         "moscow" to "RU", "saint petersburg" to "RU", "novosibirsk" to "RU",
@@ -238,8 +247,10 @@ object CountryFlagHelper {
         "tallinn" to "EE", "riga" to "LV", "vilnius" to "LT",
         "istanbul" to "TR", "ankara" to "TR",
         "tel aviv" to "IL", "jerusalem" to "IL",
-        "dubai" to "AE", "abu dhabi" to "AE",
-        "riyadh" to "SA", "jeddah" to "SA",
+        "dubai" to "AE", "abu dhabi" to "AE", "дубай" to "AE", "абу-даби" to "AE",
+        "riyadh" to "SA", "jeddah" to "SA", "эр-рияд" to "SA", "джидда" to "SA",
+        "manama" to "BH", "манама" to "BH", "doha" to "QA", "доха" to "QA",
+        "kuwait city" to "KW", "эль-кувейт" to "KW", "muscat" to "OM", "маскат" to "OM",
         "cairo" to "EG", "johannesburg" to "ZA", "cape town" to "ZA",
         "lagos" to "NG", "nairobi" to "KE",
         "sao paulo" to "BR", "rio de janeiro" to "BR",
@@ -261,7 +272,7 @@ object CountryFlagHelper {
         "ar", "mx", "ca", "au", "nz", "in", "sg", "my", "th", "vn",
         "id", "ph", "eg", "za", "ng", "ke", "kz", "uz", "ge", "am",
         "az", "ee", "lv", "lt", "lu", "al", "mk", "ba", "sk", "md",
-        "tw", "hk", "pk", "bd", "ir", "iq", "sa", "ae", "qa", "us",
+        "tw", "hk", "pk", "bd", "ir", "iq", "sa", "ae", "bh", "qa", "kw", "om", "us",
         "uk"
     )
 
@@ -291,19 +302,8 @@ object CountryFlagHelper {
         val safeName = name ?: ""
         val safeServer = server ?: ""
 
-        val combined = "$safeName $safeServer".lowercase(Locale.ROOT)
-        if (combined.contains("warp") || combined.contains("cloudflare")) {
-            return "US"
-        }
-
-        val emojiResult = detectEmoji(safeName)
-        if (emojiResult.isNotEmpty()) return emojiResult
-
-        val nameResult = detectName(safeName)
-        if (nameResult.isNotEmpty()) return nameResult
-
-        val codeResult = detectCode(safeName)
-        if (codeResult.isNotEmpty()) return codeResult
+        val explicitResult = detectCountryFromName(safeName)
+        if (explicitResult.isNotEmpty()) return explicitResult
 
         val serverResult = detectServer(safeServer)
         if (serverResult.isNotEmpty()) return serverResult
@@ -312,6 +312,38 @@ object CountryFlagHelper {
         if (serverCodeResult.isNotEmpty()) return serverCodeResult
 
         return ""
+    }
+
+    /**
+     * Detects only information deliberately present in a node label. Cloudflare and WARP
+     * are global networks, so neither one implies the United States.
+     */
+    fun detectCountryFromName(name: String?): String {
+        val safeName = name.orEmpty()
+        return detectEmoji(safeName)
+            .ifBlank { detectName(safeName) }
+            .ifBlank { detectCode(safeName) }
+    }
+
+    /**
+     * Returns a stable location for duplicate endpoints when one country has a real,
+     * unambiguous majority. A single label is not enough to override another node.
+     */
+    fun consensusCountry(codes: Iterable<String>): String {
+        val counts = codes.asSequence()
+            .map { it.trim().uppercase(Locale.US) }
+            .filter { it in VALID_CODES }
+            .groupingBy { it }
+            .eachCount()
+        if (counts.isEmpty()) return ""
+        val ranked = counts.entries.sortedWith(
+            compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key }
+        )
+        val winner = ranked.first()
+        val runnerUpCount = ranked.getOrNull(1)?.value ?: 0
+        return winner.key.takeIf {
+            winner.value >= 2 && winner.value > runnerUpCount && winner.value * 2 > counts.values.sum()
+        }.orEmpty()
     }
 
     /** Human readable location for an ISO country code, e.g. "DE" -> "Germany". */

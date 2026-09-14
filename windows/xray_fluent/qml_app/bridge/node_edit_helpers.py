@@ -1093,7 +1093,7 @@ def _protocol_editor_fields(protocol: str, values: dict[str, Any], native: dict[
     elif protocol == "openvpn":
         fields.extend([
             _editor_field("openvpnServersJson", "OpenVPN servers (JSON)", values.get("openvpnServersJson", ""), kind="area", placeholder='[{"server":"vpn.example.com","server_port":1194}]'),
-            _editor_field("openvpnProto", "OpenVPN transport", values.get("openvpnProto", "tcp"), kind="combo", options=("tcp",)),
+            _editor_field("openvpnProto", "OpenVPN transport", values.get("openvpnProto", "udp"), kind="combo", options=("udp", "tcp")),
             _editor_field("openvpnCipher", "Data cipher", values.get("openvpnCipher", ""), kind="combo", options=("", "AES-128-GCM", "AES-192-GCM", "AES-256-GCM", "AES-128-CBC", "AES-192-CBC", "AES-256-CBC", "CHACHA20-POLY1305")),
             _editor_field("openvpnAuth", "HMAC auth", values.get("openvpnAuth", ""), kind="combo", options=("", "SHA1", "SHA256", "SHA384", "SHA512")),
             _editor_field("username", "Username", values.get("username", "")),
@@ -1373,7 +1373,7 @@ def load_node_edit_fields(node) -> dict:
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
-            fields["openvpnProto"] = str(native.get("proto") or "tcp")
+            fields["openvpnProto"] = str(native.get("proto") or native.get("network") or "udp")
             fields["openvpnCipher"] = str(native.get("cipher") or "")
             fields["openvpnAuth"] = str(native.get("auth") or "")
             fields["username"] = str(native.get("username") or "")
@@ -1864,7 +1864,7 @@ def build_node_updates(node, fields: dict) -> dict:
             server_item["server_port"] = port
             native["system"] = False
             native["name"] = g("interfaceName", "openvpn0") or "openvpn0"
-            native["proto"] = g("openvpnProto", "tcp").lower() or "tcp"
+            native["proto"] = g("openvpnProto", "udp").lower() or "udp"
             _set_optional(native, "cipher", g("openvpnCipher").upper())
             _set_optional(native, "auth", g("openvpnAuth").upper())
             _set_optional(native, "username", g("username"))
