@@ -40,17 +40,35 @@ jobs:
             rm -rf "$INNER"
           fi
 
-      - name: Replace project files
+      - name: Remove explicitly obsolete paths
+        # Only paths listed here are ever deleted. Nothing else in the repo
+        # is touched, even if it's missing from the ZIP.
         run: |
-          find . -mindepth 1 -maxdepth 1 \
-            ! -name ".git" \
-            ! -name ".github" \
-            ! -name "$(basename "$ZIP")" \
-            ! -name "extracted" \
-            -exec rm -rf {} +
+          OBSOLETE_PATHS=(
+            "android/app/src/main/java/com/lumen"
+            "android/app/src/test/java/com/lumen"
+            "android/ui/src/main/java/com/lumen"
+            "android/ui/src/test/java/com/lumen"
+            "android/core/database/src/main/java/com/lumen"
+            "android/core/database/src/test/java/com/lumen"
+            "android/core/config/src/main/java/com/lumen"
+            "android/core/config/src/test/java/com/lumen"
+            "android/core/vpn/src/main/java/com/lumen"
+            "android/core/vpn/src/test/java/com/lumen"
+            "android/core/engine/src/main/java/com/lumen"
+            "android/core/engine/src/test/java/com/lumen"
+            "android/bin/com/lumen"
+          )
+          for p in "${OBSOLETE_PATHS[@]}"; do
+            if [ -e "$p" ]; then
+              echo "Removing obsolete: $p"
+              rm -rf "$p"
+            fi
+          done
 
+      - name: Overlay ZIP contents (never deletes anything else)
+        run: |
           cp -a extracted/. .
-
           rm -rf extracted
           rm -f "$ZIP"
 
