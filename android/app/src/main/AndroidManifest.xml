@@ -12,10 +12,6 @@
         android:name="android.hardware.camera"
         android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Required on Android 8+ before Lumen may hand its downloaded release APK
-         to the system package installer. The user still approves both the source
-         and every individual update in Android's own UI. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Lets the home screen widget repaint itself after a reboot or update. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- The in-app vibration switch drives the vibrator directly, so it keeps working
@@ -31,23 +27,17 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Lumen">
 
-        <!-- Explicit PackageInstaller status target. It has no intent filter and cannot
-             be invoked by other apps; only Lumen's own session PendingIntent targets it. -->
-        <receiver
-            android:name="com.lumen.app.update.AndroidUpdateInstallReceiver"
-            android:exported="false" />
-
         <activity
-            android:name="com.lumen.app.MainActivity"
+            android:name="com.ucprovpn.app.MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
 
-            <!-- MAIN/LAUNCHER deliberately lives on the <activity-alias> entries below,
-                 not here: that is the only way the user can pick a launcher icon.
-                 Every other filter must stay on the activity itself or the lumen://
-                 deep links and "open with Lumen" stop resolving. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
 
             <!-- Proxy link deep links -->
             <intent-filter>
@@ -111,68 +101,8 @@
             </intent-filter>
         </activity>
 
-        <!--
-            Launcher icon picker. A launcher icon can only be swapped by enabling one
-            <activity-alias> and disabling the others, so there is one alias per choice
-            and all three point at the same MainActivity.
-
-            Invariants, enforced by LauncherIconManager:
-              * EXACTLY ONE of these is enabled at any moment. Zero enabled removes the
-                app from the launcher entirely and it can no longer be started, so the
-                switch always enables the new alias BEFORE disabling the old one.
-              * These component names are persisted by the system (getComponentEnabledSetting)
-                and are baked into any pinned shortcut, so they must never be renamed.
-              * A fresh install starts from these android:enabled defaults, which is why
-                MainViewModel reconciles the stored preference on every launch.
-
-            "Default" keeps @mipmap/ic_launcher, which auto-themes through the
-            res/drawable-night qualifier. The other two point at qualifier-free
-            artwork so the user's pick survives a system light/dark switch.
-        -->
-        <activity-alias
-            android:name="com.lumen.app.LauncherAliasDefault"
-            android:targetActivity="com.lumen.app.MainActivity"
-            android:enabled="true"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher"
-            android:roundIcon="@mipmap/ic_launcher_round"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
-        <activity-alias
-            android:name="com.lumen.app.LauncherAliasLight"
-            android:targetActivity="com.lumen.app.MainActivity"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher_light"
-            android:roundIcon="@mipmap/ic_launcher_light_round"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
-        <activity-alias
-            android:name="com.lumen.app.LauncherAliasDark"
-            android:targetActivity="com.lumen.app.MainActivity"
-            android:enabled="false"
-            android:exported="true"
-            android:icon="@mipmap/ic_launcher_dark"
-            android:roundIcon="@mipmap/ic_launcher_dark_round"
-            android:label="@string/app_name">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
         <activity
-            android:name="com.lumen.app.PortraitCaptureActivity"
+            android:name="com.ucprovpn.app.PortraitCaptureActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:stateNotNeeded="true"
@@ -182,12 +112,12 @@
 
         <!-- Desktop Home Screen AppWidget -->
         <receiver
-            android:name="com.lumen.app.widget.LumenWidgetProvider"
+            android:name="com.ucprovpn.app.widget.LumenWidgetProvider"
             android:exported="true"
-            android:label="Lumen VPN Widget">
+            android:label="UC ProVpn Widget">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.lumen.app.widget.ACTION_UPDATE_STATE" />
+                <action android:name="com.ucprovpn.app.widget.ACTION_UPDATE_STATE" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -199,17 +129,17 @@
         <!-- Tunnel control for both widgets. Never exported: the widget click
              PendingIntents are explicit, so only this app can toggle the VPN. -->
         <receiver
-            android:name="com.lumen.app.widget.LumenWidgetControlReceiver"
+            android:name="com.ucprovpn.app.widget.LumenWidgetControlReceiver"
             android:exported="false" />
 
         <!-- Compact 1x1 AppWidget: power button only -->
         <receiver
-            android:name="com.lumen.app.widget.LumenCompactWidgetProvider"
+            android:name="com.ucprovpn.app.widget.LumenCompactWidgetProvider"
             android:exported="true"
-            android:label="Lumen VPN 1x1">
+            android:label="UC ProVpn 1x1">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.lumen.app.widget.ACTION_UPDATE_STATE" />
+                <action android:name="com.ucprovpn.app.widget.ACTION_UPDATE_STATE" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -220,11 +150,11 @@
 
         <!-- Quick Settings Tile (Nothing OS / Android Quick Settings shade) -->
         <service
-            android:name="com.lumen.core.vpn.LumenTileService"
+            android:name="com.ucprovpn.core.vpn.LumenTileService"
             android:exported="true"
-            android:icon="@drawable/ic_qs_lumen"
+            android:icon="@drawable/ic_qs_ucprovpn"
             tools:replace="android:icon"
-            android:label="Lumen VPN"
+            android:label="UC ProVpn"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

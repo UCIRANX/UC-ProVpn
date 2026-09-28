@@ -30,11 +30,11 @@ val abiVersionCodeOffsets = mapOf(
 )
 
 android {
-    namespace = "net.kramb.lumen"
+    namespace = "com.ucprovpn.app"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "net.kramb.lumen"
+        applicationId = "com.ucprovpn.app"
         minSdk = 26
         targetSdk = 34
         versionCode = baseVersionCode

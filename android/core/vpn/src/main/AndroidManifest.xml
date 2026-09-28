@@ -24,7 +24,7 @@
             android:name=".LumenTileService"
             android:exported="true"
             android:icon="@android:drawable/ic_dialog_info"
-            android:label="Lumen VPN"
+            android:label="UC ProVpn"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

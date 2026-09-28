@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.lumen.ui"
+    namespace = "com.ucprovpn.ui"
     compileSdk = 34
 
     defaultConfig {

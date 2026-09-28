@@ -4,10 +4,10 @@
 # Room resolves <Database>_Impl by name at runtime.
 -keep class * extends androidx.room.RoomDatabase { *; }
 -keep class **_Impl { *; }
--keepclassmembers class com.lumen.core.database.model.** { *; }
+-keepclassmembers class com.ucprovpn.core.database.model.** { *; }
 
 # Entity/DAO signatures are read through generated code that R8 cannot follow back.
--keep class com.lumen.core.database.dao.** { *; }
+-keep class com.ucprovpn.core.database.dao.** { *; }
 
 # QR import screen instantiates the scanner through reflection.
 -keep class com.journeyapps.barcodescanner.** { *; }

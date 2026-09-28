@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.lumen.core.engine"
+    namespace = "com.ucprovpn.core.engine"
     compileSdk = 34
 
     defaultConfig {
