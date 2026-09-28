@@ -16,6 +16,7 @@ jobs:
 
       - name: Find ZIP
         run: |
+          # پیدا کردن اولین فایل ZIP در ریشهٔ مخزن
           ZIP=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
           if [ -z "$ZIP" ]; then
             echo "No ZIP file found in repository root."
@@ -25,12 +26,17 @@ jobs:
 
       - name: Extract ZIP
         run: |
+          # پاک‌سازی و ساخت پوشهٔ موقت
           rm -rf extracted
           mkdir extracted
           unzip -q "$ZIP" -d extracted
+          # اصلاح دسترسی‌ها: خواندن/نوشتن برای همه فایل‌ها و اجرا برای پوشه‌ها
+          # (بدون این خط، cp روی فایل‌های بدون دسترسی خطای Permission denied می‌دهد)
+          chmod -R u+rwX extracted
 
       - name: Detect project folder
         run: |
+          # اگر داخل ZIP فقط یک پوشه وجود دارد، محتوای آن را به سطح بالا منتقل کن
           if [ "$(find extracted -mindepth 1 -maxdepth 1 | wc -l)" = "1" ] && \
              [ -d "$(find extracted -mindepth 1 -maxdepth 1 -type d)" ]; then
             INNER=$(find extracted -mindepth 1 -maxdepth 1 -type d)
@@ -39,8 +45,8 @@ jobs:
           fi
 
       - name: Remove explicitly obsolete paths
-        # Only paths listed here are ever deleted. Everything else in the repo
-        # is left alone, even if it is missing from the ZIP.
+        # فقط مسیرهای فهرست‌شده در اینجا حذف می‌شوند. هر چیز دیگری در مخزن
+        # دست‌نخورده می‌ماند، حتی اگر در ZIP وجود نداشته باشد.
         run: |
           OBSOLETE_PATHS=(
             "android/app/src/main/java/com/lumen"
@@ -97,9 +103,14 @@ jobs:
 
       - name: Overlay ZIP contents (never deletes anything else)
         run: |
+          # کپی محتوای ZIP روی مخزن (چیز دیگری حذف نمی‌شود)
           cp -a extracted/. .
           rm -rf extracted
           rm -f "$ZIP"
+          # اطمینان از قابل اجرا بودن gradlew (ممکن است ZIP این دسترسی را نداشته باشد)
+          if [ -f android/gradlew ]; then
+            chmod +x android/gradlew
+          fi
 
       - name: Commit changes
         run: |
