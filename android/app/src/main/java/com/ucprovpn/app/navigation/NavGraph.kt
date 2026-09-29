@@ -275,7 +275,7 @@ fun LumenApp(
                         .fillMaxWidth()
                         .navigationBarsPadding()
                         // Extra breathing room so page content never touches the pill.
-                        .padding(top = 10.dp, bottom = 4.dp),
+                        .padding(top = 0.dp, bottom = 2.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     val pillShape = RoundedCornerShape(26.dp)

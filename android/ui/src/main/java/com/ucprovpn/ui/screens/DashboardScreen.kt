@@ -855,7 +855,7 @@ fun HomeConnectBar(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = 16.dp, vertical = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
@@ -881,7 +881,7 @@ fun HomeConnectBar(
         HeroConnectButton(
             state = connectionState,
             onConnectClick = onToggleConnection,
-            buttonSize = 64.dp,
+            buttonSize = 84.dp,
             compact = true
         )
     }

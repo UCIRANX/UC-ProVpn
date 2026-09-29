@@ -160,8 +160,8 @@ object VpnLogBus {
         )
         val defaults = VpnLogSettings()
         VpnLogSettings(
-            enabled = prefs.getBoolean(KEY_LOGGING_ENABLED, defaults.enabled),
-            persist = prefs.getBoolean(KEY_PERSIST_LOGS, defaults.persist),
+            enabled = prefs.getBoolean(KEY_LOGGING_ENABLED, false),
+            persist = prefs.getBoolean(KEY_PERSIST_LOGS, false),
             level = runCatching {
                 VpnLogLevel.valueOf(prefs.getString(KEY_LOG_LEVEL, null) ?: defaults.level.name)
             }.getOrDefault(defaults.level),

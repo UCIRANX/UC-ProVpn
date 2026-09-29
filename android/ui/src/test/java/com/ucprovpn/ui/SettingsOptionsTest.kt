@@ -53,7 +53,7 @@ class SettingsOptionsTest {
         assertEquals(0, state.outboundConnectTimeoutSeconds)
         assertEquals(0, state.urlTestIdleTimeoutMinutes)
         assertTrue(state.urlTestInterruptExistConnections)
-        assertTrue(state.loggingEnabled)
+        assertFalse(state.loggingEnabled)
         assertFalse(state.proxyOnly)
         assertFalse(state.pingAutoDeleteUnreachable)
         assertEquals(1, state.pingAutoDeleteThresholdMs)

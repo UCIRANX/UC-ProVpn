@@ -119,6 +119,7 @@ class LumenVpnService : VpnService() {
         }
         when (intent.action) {
             ACTION_START_VPN -> {
+                keepPausedNotification = false
                 val engineType = runCatching {
                     EngineType.valueOf(intent.getStringExtra(EXTRA_ENGINE_TYPE) ?: EngineType.SINGBOX.name)
                 }.getOrDefault(EngineType.SINGBOX)
@@ -152,7 +153,10 @@ class LumenVpnService : VpnService() {
                     )
                 )
             }
-            ACTION_STOP_VPN -> stopVpn()
+            ACTION_STOP_VPN -> {
+                keepPausedNotification = false
+                stopVpn()
+            }
             ACTION_PAUSE_VPN -> pauseVpn()
         }
         // Every start is explicit and carries the complete generated config.
@@ -1161,6 +1165,7 @@ ${hevAuthLines}misc:
             stopRuntime(closeInterface = true)
             // DETACH (not REMOVE): keeps the existing notification on screen as a
             // normal, dismissible one so it can be updated to show Reconnect below.
+            keepPausedNotification = true
             stopForeground(STOP_FOREGROUND_DETACH)
             NotificationHelper.postPaused(this@LumenVpnService)
             stopSelf(stoppingStartId)
@@ -1270,7 +1275,12 @@ ${hevAuthLines}misc:
         vpnInterface = null
         _isRunning.value = false
         _notificationsBlocked.value = false
-        NotificationHelper.cancel(this)
+        if (keepPausedNotification) {
+            // Paused: leave the notification (now showing Reconnect) on screen.
+            keepPausedNotification = false
+        } else {
+            NotificationHelper.cancel(this)
+        }
         notifyWidgets()
         serviceScope.cancel()
         super.onDestroy()
@@ -1320,6 +1330,14 @@ ${hevAuthLines}misc:
         const val ACTION_START_VPN = "com.ucprovpn.core.vpn.START_VPN"
         const val ACTION_STOP_VPN = "com.ucprovpn.core.vpn.STOP_VPN"
         const val ACTION_PAUSE_VPN = "com.ucprovpn.core.vpn.PAUSE_VPN"
+
+        /**
+         * True from the moment the user taps Pause until the next start. onDestroy runs
+         * right after pauseVpn() and would otherwise cancel the very notification that
+         * is supposed to stay behind with its Reconnect button.
+         */
+        @Volatile
+        private var keepPausedNotification = false
         const val EXTRA_ENGINE_TYPE = "extra_engine_type"
         const val EXTRA_CONFIG_JSON = "extra_config_json"
         const val EXTRA_CONFIG_PATH = "extra_config_path"

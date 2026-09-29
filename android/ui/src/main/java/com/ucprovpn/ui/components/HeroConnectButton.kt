@@ -6,7 +6,6 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -38,7 +37,6 @@ import androidx.compose.ui.unit.sp
 import com.ucprovpn.ui.theme.ConnectionConnecting
 import com.ucprovpn.ui.theme.ConnectionDanger
 import com.ucprovpn.ui.theme.ConnectionDisconnected
-import com.ucprovpn.ui.theme.ConnectionSuccess
 
 enum class ConnectionState {
     Disconnected,
@@ -46,6 +44,9 @@ enum class ConnectionState {
     Connected,
     Error
 }
+
+// Brand accent shown while connected (phosphorescent green).
+private val UcGreen = Color(0xFF39FF14)
 
 @Composable
 fun HeroConnectButton(
@@ -114,7 +115,7 @@ fun HeroConnectButton(
     val targetColor = when (state) {
         ConnectionState.Disconnected -> ConnectionDisconnected
         ConnectionState.Connecting -> ConnectionConnecting
-        ConnectionState.Connected -> ConnectionSuccess
+        ConnectionState.Connected -> UcGreen
         ConnectionState.Error -> ConnectionDanger
     }
 
@@ -139,7 +140,7 @@ fun HeroConnectButton(
     ) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.size(buttonSize * 1.3f)
+            modifier = Modifier.size(if (compact) buttonSize * 1.1f else buttonSize * 1.3f)
         ) {
             // Pulse outer glow canvas (MINIMAL GLOW)
             Canvas(modifier = Modifier.matchParentSize()) {
@@ -177,7 +178,8 @@ fun HeroConnectButton(
 
                     // Flat container background (no gradient by request)
                     val bgColor = when (state) {
-                        ConnectionState.Connected -> cardBg.copy(alpha = 0.92f)
+                        // Compact: solid phosphorescent green, so "connected" is obvious at a glance.
+                        ConnectionState.Connected -> if (compact) UcGreen else cardBg.copy(alpha = 0.92f)
                         ConnectionState.Connecting -> cardBg.copy(alpha = 0.92f)
                         ConnectionState.Error -> cardBg.copy(alpha = 0.92f)
                         ConnectionState.Disconnected -> surfaceVariantBg.copy(alpha = 0.55f)
@@ -239,7 +241,7 @@ fun HeroConnectButton(
                     androidx.compose.material3.Icon(
                         imageVector = androidx.compose.material.icons.Icons.Filled.PowerSettingsNew,
                         contentDescription = centerText,
-                        tint = animatedColor,
+                        tint = if (state == ConnectionState.Connected) Color.Black else animatedColor,
                         modifier = Modifier.size(buttonSize * 0.4f)
                     )
                 } else {

@@ -64,7 +64,7 @@ object TelemetryManager {
 
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(VpnStartIntentFactory.PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(PREF_TELEMETRY_ENABLED, true)
+            .getBoolean(PREF_TELEMETRY_ENABLED, false)
 
     fun setEnabled(context: Context, enabled: Boolean) {
         errorUploadGeneration++

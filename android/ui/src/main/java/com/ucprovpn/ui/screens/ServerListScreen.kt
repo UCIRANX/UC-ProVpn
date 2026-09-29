@@ -7,7 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -183,7 +182,7 @@ fun ServerListScreen(
     // Group / protocol / sort choices survive app restarts so the tab reopens as it was left.
     var group by rememberUiPreference("servers_last_group", GROUP_ALL)
     var protocol by rememberUiPreference("servers_last_protocol", PROTOCOL_ALL)
-    var sortKey by rememberUiPreference(SERVERS_SORT_PREF, ServerSort.DEFAULT.name)
+    var sortKey by rememberUiPreference(SERVERS_SORT_PREF, ServerSort.PING.name)
     val sort = remember(sortKey) { serverSortOf(sortKey) }
     // Optional automatic check when the tab opens; fires once per screen entry.
     var autoPingStarted by remember { mutableStateOf(false) }

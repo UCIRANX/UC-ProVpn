@@ -54,7 +54,7 @@ class LogsAndEditorGuardsTest {
         // Verbosity and retention are no longer user facing: one switch owns the
         // core log, the log bus and the persisted store.
         val state = SettingsUiState()
-        assertTrue(state.loggingEnabled)
+        assertFalse(state.loggingEnabled)
         val fields = SettingsUiState::class.java.declaredFields.map { it.name }
         assertTrue(fields.none { it.startsWith("logLevel") || it.startsWith("logMin") })
         assertTrue(fields.none { it.startsWith("logPersist") || it.startsWith("logRetention") })

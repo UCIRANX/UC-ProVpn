@@ -445,7 +445,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         dnsDirectStrategy = prefs.getString("dns_direct_strategy", "ipv4_only") ?: "ipv4_only",
         dnsProxyStrategy = prefs.getString("dns_proxy_strategy", "ipv4_only") ?: "ipv4_only",
         dnsHijackEnabled = prefs.getBoolean("dns_hijack_enabled", true),
-        dnsFakeIpEnabled = prefs.getBoolean("dns_fake_ip_enabled", false),
+        dnsFakeIpEnabled = prefs.getBoolean("dns_fake_ip_enabled", true),
         dnsParallelQuery = prefs.getBoolean("dns_parallel_query", false),
         dnsOptimisticCache = prefs.getBoolean("dns_optimistic_cache", false),
         dnsGeoCheck = prefs.getBoolean("dns_geo_check", true),
@@ -489,14 +489,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrDefault(ThemePreset.UC_PROVPN),
         useMaterialYou = prefs.getBoolean("use_material_you", false),
         useAmoledBlack = prefs.getBoolean("use_amoled_black", false),
-        hapticsEnabled = prefs.getBoolean("haptics_enabled", true),
+        hapticsEnabled = prefs.getBoolean("haptics_enabled", false),
         telemetryEnabled = prefs.getBoolean(
             com.ucprovpn.core.vpn.TelemetryManager.PREF_TELEMETRY_ENABLED,
-            true
+            false
         ),
         reconnectOnNetworkChange = prefs.getBoolean("reconnect_on_network_change", true),
         validateProxyDataPath = prefs.getBoolean("validate_proxy_data_path", false),
-        pingType = normalizedPingType(prefs.getString("server_speed_test_type", "http")),
+        pingType = normalizedPingType(prefs.getString("server_speed_test_type", "real")),
         pingTimeoutMs = prefs.getInt("ping_timeout_ms", 2000),
         pingConcurrency = prefs.getInt("ping_concurrency", 16),
         pingUrl = prefs.getString("ping_url", "https://www.gstatic.com/generate_204")
@@ -2026,9 +2026,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val autoMemberPingSemaphore =
         kotlinx.coroutines.sync.Semaphore(PingBudget.AUTO_MEMBER_CONCURRENCY)
     // A real HTTP test starts an isolated sing-box proxy for the target node.
-    // Two cores are already enough to keep a phone busy; starting four at once caused
-    // CPU/memory pressure and sporadic startup failures on slower devices.
-    private val realPingSemaphore = kotlinx.coroutines.sync.Semaphore(2)
+    // Four temporary cores at once is the compromise between speed and CPU/memory
+    // pressure on slower devices (two was safe but made "ping all" very slow).
+    private val realPingSemaphore =
+        kotlinx.coroutines.sync.Semaphore(PingBudget.CORE_PING_CONCURRENCY)
     // Port discovery releases its temporary socket before sing-box binds it. Serialize
     // only that short startup phase so two probes cannot race for the same local port.
     private val realPingStartupMutex = Mutex()
@@ -3712,7 +3713,7 @@ internal object PingBudget {
     const val AUTO_MEMBER_CONCURRENCY = 32
 
     /** Mirrors realPingSemaphore; used by bulk scheduling to avoid timeout in its queue. */
-    const val CORE_PING_CONCURRENCY = 2
+    const val CORE_PING_CONCURRENCY = 4
 
     /** Nothing may hold a single row in "measuring" longer than this. */
     const val MAX_NODE_MS = 180_000L

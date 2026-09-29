@@ -62,7 +62,7 @@ class MainViewModelPingTest {
 
     @Test
     fun autoPoolBudgetUsesActualCoreConcurrency() {
-        assertEquals(120_000L, PingBudget.nodeMs(30_000L, 8, PingBudget.CORE_PING_CONCURRENCY))
+        assertEquals(60_000L, PingBudget.nodeMs(30_000L, 8, PingBudget.CORE_PING_CONCURRENCY))
         assertEquals(30_000L, PingBudget.nodeMs(30_000L, 8, PingBudget.AUTO_MEMBER_CONCURRENCY))
     }
 }
