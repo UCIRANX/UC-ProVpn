@@ -2539,7 +2539,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }.getOrDefault(emptyMap())
             if (pinned.isEmpty() && (System.nanoTime() - pinStartedAt) >= 2_300_000_000L) {
-                pinProbeSkipUntilNanos = System.nanoTime() + 60_000_000_000L
+                pinProbeSkipUntilNanos = System.nanoTime() + 15_000_000_000L
             }
             pinned
         }
